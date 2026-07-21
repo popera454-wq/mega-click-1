@@ -13,50 +13,66 @@ async function handleYemot(req: Request) {
   try {
     const { searchParams } = new URL(req.url);
 
-    // ימות המשיח שולחת את הנתונים האלו בכל פנייה
     const phone = searchParams.get('ApiPhone') || 'Unknown';
     const pin = searchParams.get('pin');
     const answer = searchParams.get('answer');
+    const scoreParam = searchParams.get('score');
 
-    // שלב 1: הלקוח רק נכנס, עדיין אין לו PIN
+    let currentScore = scoreParam ? parseInt(scoreParam, 10) : 0;
+    const playerId = `phone_${phone.slice(-4)}`;
+
+    // --- שלב 1: קליטת PIN (הקראת טקסט ללא קבצים) ---
     if (!pin) {
-      // ההוראה לימות המשיח: להשמיע קובץ 1000 ולקלוט 6 ספרות
-      // פורמט הפקודה: read=file=var_name,replay,max,min,timeout,allowed_keys
-      return new Response('read=f-001=pin,no,6,6,7,', {
+      // t-... אומר לימות המשיח להקריא את הטקסט המצורף
+      return new Response('read=t-אנא הקש את קוד המשחק בן 6 הספרות=pin,no,6,6,7,Digits,no,no,no,', {
         headers: { 'Content-Type': 'text/plain; charset=utf-8' },
       });
     }
 
-    // שלב 2: הלקוח הקיש PIN, אבל עדיין אין לו תשובה
-    if (pin && !answer) {
-      // ההוראה לימות המשיח: להשמיע קובץ 1001 ולקלוט 1 ספרה (רק 1,2,3,4 מותרים)
-      return new Response('read=f-000=answer,no,1,1,7,1234', {
+    const channel = supabase.channel(`game_${pin}`);
+
+    // --- שלב 2: הצטרפות ראשונית למשחק ---
+    if (pin && !answer && !scoreParam) {
+      // רישום השחקן בלייב בשרת
+      await channel.send({
+        type: 'broadcast',
+        event: 'PLAYER_JOINED',
+        payload: {
+          id: playerId,
+          name: `טלפון ${phone.slice(-4)}`,
+          score: 0,
+        },
+      });
+
+      // הקראת הודעת התחברות והנחיה להקיש 1-4
+      return new Response(`read=t-התחברת בהצלחה למשחק. כשתופיע שאלה הקש 1 2 3 או 4 לתשובה=answer,no,1,1,15,Digits,no,no,no,1234&score=0`, {
         headers: { 'Content-Type': 'text/plain; charset=utf-8' },
       });
     }
 
-    // שלב 3: יש לנו את שני הנתונים! מזרימים למשחק.
+    // --- שלב 3: קליטת תשובה ועדכון ניקוד ---
     if (pin && answer) {
       const answerIndex = parseInt(answer, 10) - 1;
+      currentScore += 10;
 
-      const channel = supabase.channel(`game_${pin}`);
+      // שידור התשובה ללוח המנחה
       await channel.send({
         type: 'broadcast',
         event: 'SUBMIT_ANSWER',
         payload: {
-          playerId: `phone_${phone.slice(-4)}`,
+          playerId,
           answerIndex,
-          timeTaken: 5,
+          score: currentScore,
+          timeTaken: 3,
         },
       });
 
-      // ההוראה לימות המשיח: השמע קובץ 1002 (תודה) ונתק את השיחה.
-      return new Response('id_list_message=f-1002&hangup=yes', {
+      // הקראת אישור קליטה והמתנה לשאלה הבאה בלולאה
+      return new Response(`read=t-תשובתך נקלטה בהצלחה. לשאלה הבאה הקש את תשובתך=answer,no,1,1,15,Digits,no,no,no,1234&score=${currentScore}`, {
         headers: { 'Content-Type': 'text/plain; charset=utf-8' },
       });
     }
 
-    // ברירת מחדל למקרה שמשהו השתבש
     return new Response('hangup=yes', {
       headers: { 'Content-Type': 'text/plain; charset=utf-8' },
     });
