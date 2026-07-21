@@ -177,7 +177,7 @@ export default function LoginPage() {
 
           <div>
             <label className="block text-xs font-bold text-white/80 mb-1">
-              דוא"ל
+              דואל
             </label>
             <input
               type="email"
