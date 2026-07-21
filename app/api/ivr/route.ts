@@ -14,27 +14,34 @@ async function handleYemot(req: Request) {
     const { searchParams } = new URL(req.url);
 
     const phone = searchParams.get('ApiPhone') || 'Unknown';
-    // ימות המשיח מעבירה את הערכים לפעמים באותיות קטנות ולפעמים בפרמטרים של ה-read
-    const pin = searchParams.get('pin') || searchParams.get('val_name_pin');
-    const answer = searchParams.get('answer') || searchParams.get('val_name_answer');
-    const joined = searchParams.get('joined');
+    const pin = searchParams.get('pin');
+    const answer = searchParams.get('answer');
     const scoreParam = searchParams.get('score');
 
     let currentScore = scoreParam ? parseInt(scoreParam, 10) : 0;
     const playerId = `phone_${phone.slice(-4)}`;
 
-    // --- שלב 1: עוד לא הוקש PIN ---
+    // --- שלב 1: לקוח נכנס, עדיין לא הקיש PIN ---
     if (!pin) {
-      // no,6,6,7,Digits,no,no,no -> ה-"no" האחרונים מבטלים לחלוטין את ה"לאישור הקש 1"!
-      return new Response('read=t-אנא הקש את קוד המשחק בן 6 הספרות=pin,no,6,6,7,Digits,no,no,no,', {
-        headers: { 'Content-Type': 'text/plain; charset=utf-8' },
+      return NextResponse.json({
+        values: {
+          pin: {
+            type: 'read',
+            read_type: 'digits',
+            min: 6,
+            max: 6,
+            timeout: 7,
+            confirm: false, // מנטרל לחלוטין את "לאישור הקש 1"
+            id_list_message: 't-אנא הקש את קוד המשחק בן 6 הספרות'
+          }
+        }
       });
     }
 
     const channel = supabase.channel(`game_${pin}`);
 
-    // --- שלב 2: הוקש PIN והמשתמש נרשם עכשיו למשחק ---
-    if (pin && !answer && !joined) {
+    // --- שלב 2: הוקש PIN, השחקן מצטרף למשחק ---
+    if (pin && !answer && !scoreParam) {
       // רישום המשתתף ב-Supabase בבלייב
       await channel.send({
         type: 'broadcast',
@@ -46,18 +53,32 @@ async function handleYemot(req: Request) {
         },
       });
 
-      // משמיע הודעת התחברות ועובר מיד לקליטת תשובה 1-4 בלבד
-      return new Response(`read=t-התחברת בהצלחה! כשתופיע שאלה הקש 1 2 3 או 4 לתשובה=answer,no,1,1,15,Digits,no,no,no,1234&joined=1&pin=${pin}&score=0`, {
-        headers: { 'Content-Type': 'text/plain; charset=utf-8' },
+      return NextResponse.json({
+        values: {
+          answer: {
+            type: 'read',
+            read_type: 'digits',
+            min: 1,
+            max: 1,
+            timeout: 15,
+            confirm: false,
+            id_list_message: 't-התחברת בהצלחה! כשתופיע שאלה הקש 1 2 3 או 4 לתשובה'
+          }
+        },
+        // שמירת ה-PIN והניקוד בהמשך השיחה
+        params: {
+          pin: pin,
+          score: '0'
+        }
       });
     }
 
-    // --- שלב 3: הוקשה תשובה לשאלה ---
+    // --- שלב 3: הוקשה תשובה לשאלה (1-4) ---
     if (pin && answer) {
       const answerIndex = parseInt(answer, 10) - 1;
       currentScore += 10;
 
-      // שליחת התשובה והניקוד המעודכן לשרת
+      // שידור התשובה לשרת
       await channel.send({
         type: 'broadcast',
         event: 'SUBMIT_ANSWER',
@@ -69,19 +90,28 @@ async function handleYemot(req: Request) {
         },
       });
 
-      // משמיע שהתשובה נקלטה ומחזיר לבלולאה לשאלה הבאה (ללא אישורים נוספים!)
-      return new Response(`read=t-תשובתך נקלטה. לשאלה הבאה הקש 1 2 3 או 4=answer,no,1,1,15,Digits,no,no,no,1234&joined=1&pin=${pin}&score=${currentScore}`, {
-        headers: { 'Content-Type': 'text/plain; charset=utf-8' },
+      return NextResponse.json({
+        values: {
+          answer: {
+            type: 'read',
+            read_type: 'digits',
+            min: 1,
+            max: 1,
+            timeout: 15,
+            confirm: false,
+            id_list_message: 't-תשובתך נקלטה. לשאלה הבאה הקש 1 2 3 או 4'
+          }
+        },
+        params: {
+          pin: pin,
+          score: currentScore.toString()
+        }
       });
     }
 
-    return new Response('hangup=yes', {
-      headers: { 'Content-Type': 'text/plain; charset=utf-8' },
-    });
+    return NextResponse.json({ hangup: true });
 
   } catch (error) {
-    return new Response('hangup=yes', {
-      headers: { 'Content-Type': 'text/plain; charset=utf-8' },
-    });
+    return NextResponse.json({ hangup: true });
   }
 }
