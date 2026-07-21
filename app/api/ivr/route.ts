@@ -1,6 +1,43 @@
 import { NextResponse } from 'next/server';
 import { supabase } from '@/lib/supabase';
 
+// פונקציית עזר שקוראת פרמטרים גם מ-URL (GET) וגם מגוף הבקשה (POST)
+async function getParams(req: Request): Promise<Record<string, string>> {
+  const params: Record<string, string> = {};
+
+  // 1. קריאת פרמטרים מכתובת ה-URL
+  const url = new URL(req.url);
+  url.searchParams.forEach((val, key) => {
+    params[key] = val;
+  });
+
+  // 2. קריאת פרמטרים מגוף הבקשה (אם נשלח ב-POST מימות המשיח)
+  if (req.method === 'POST' || req.method === 'PUT') {
+    try {
+      const text = await req.text();
+      if (text) {
+        // ניסיון קריאה כ-form-urlencoded
+        const bodyParams = new URLSearchParams(text);
+        bodyParams.forEach((val, key) => {
+          params[key] = val;
+        });
+
+        // ניסיון קריאה כ-JSON
+        if (text.trim().startsWith('{')) {
+          const json = JSON.parse(text);
+          Object.entries(json).forEach(([k, v]) => {
+            params[k] = String(v);
+          });
+        }
+      }
+    } catch (e) {
+      console.error('Error parsing request body:', e);
+    }
+  }
+
+  return params;
+}
+
 export async function GET(req: Request) {
   return handleYemot(req);
 }
@@ -11,76 +48,87 @@ export async function POST(req: Request) {
 
 async function handleYemot(req: Request) {
   try {
-    const { searchParams } = new URL(req.url);
+    const params = await getParams(req);
 
-    const phone = searchParams.get('ApiPhone') || 'Unknown';
-    
-    // ימות המשיח לפעמים שולחת את המשתנה בתוך val_name_XXX או כמשתנה חופשי
-    const pin = searchParams.get('pin') || searchParams.get('val_name_pin');
-    const answer = searchParams.get('answer') || searchParams.get('val_name_answer');
-    const joined = searchParams.get('joined');
-    const scoreParam = searchParams.get('score');
-
-    let currentScore = scoreParam ? parseInt(scoreParam, 10) : 0;
+    // קבלת המשתנים (ימות המשיח שולחת לפעמים כ-pin ולפעמים כ-val_name_pin)
+    const phone = params['ApiPhone'] || params['phone'] || '0000';
+    const pin = params['pin'] || params['val_name_pin'];
+    const answer = params['answer'] || params['val_name_answer'];
     const playerId = `phone_${phone.slice(-4)}`;
 
-    // --- שלב 1: עוד לא התקבל PIN ---
+    // ----------------------------------------------------
+    // שלב 1: עוד לא הוקש PIN -> מבקשים קוד בן 6 ספרות
+    // ----------------------------------------------------
     if (!pin) {
-      // הפורמט המלא של read בימות המשיח:
-      // read=t-טקסט=שם_משתנה,confirm(no/yes),max,min,timeout,Digits,tap_digits_no_confirm,tap_digits_no_confirm_message
-      return new Response('read=t-אנא הקש את קוד המשחק בן 6 הספרות=pin,no,6,6,7,Digits,no,yes,', {
-        headers: { 'Content-Type': 'text/plain; charset=utf-8' },
-      });
+      // no בפרמטר השני מנטרל לחלוטין את "לאישור הקש 1"
+      return new Response(
+        'read=t-אנא הקש את קוד המשחק בן 6 הספרות=pin,no,6,6,7,Digits,no,yes,',
+        { headers: { 'Content-Type': 'text/plain; charset=utf-8' } }
+      );
     }
 
-    // --- שלב 2: התקבל PIN, השחקן נרשם עכשיו ב-Supabase ---
-    if (pin && !answer && !joined) {
+    const channel = supabase.channel(`game_${pin}`);
+
+    // ----------------------------------------------------
+    // שלב 2: הוקש PIN ועוד אין תשובה -> לרשום את השחקן בלוח!
+    // ----------------------------------------------------
+    if (pin && !answer) {
       try {
-        const channel = supabase.channel(`game_${pin}`);
         await channel.send({
           type: 'broadcast',
           event: 'PLAYER_JOINED',
-          payload: { id: playerId, name: `טלפון ${phone.slice(-4)}`, score: 0 },
+          payload: {
+            id: playerId,
+            name: `טלפון ${phone.slice(-4)}`,
+            score: 0,
+          },
         });
       } catch (e) {
-        console.error('Supabase Error:', e);
+        console.error('Supabase broadcast error:', e);
       }
 
-      // מעבירים לקליטת תשובה 1-4, ושומרים את ה-PIN וה-joined להמשך השיחה
-      return new Response(`read=t-התחברת בהצלחה. כשתופיע שאלה הקש 1 2 3 או 4 לתשובה=answer,no,1,1,15,Digits,no,yes,1234&pin=${pin}&joined=1&score=0`, {
-        headers: { 'Content-Type': 'text/plain; charset=utf-8' },
-      });
+      // משמיע שהתחבר וממתין לתשובה (1-4). הפרמטר &pin= מדביק את הקוד להמשך השיחה!
+      return new Response(
+        `read=t-התחברת בהצלחה. כשתופיע שאלה הקש 1 2 3 או 4 לתשובה=answer,no,1,1,10,Digits,no,yes,1234&pin=${pin}`,
+        { headers: { 'Content-Type': 'text/plain; charset=utf-8' } }
+      );
     }
 
-    // --- שלב 3: התקבלה תשובה (1-4) ---
+    // ----------------------------------------------------
+    // שלב 3: הוקשה תשובה (1, 2, 3 או 4) -> לשלוח למנחה!
+    // ----------------------------------------------------
     if (pin && answer) {
       const answerIndex = parseInt(answer, 10) - 1;
-      currentScore += 10;
 
       try {
-        const channel = supabase.channel(`game_${pin}`);
         await channel.send({
           type: 'broadcast',
           event: 'SUBMIT_ANSWER',
-          payload: { playerId, answerIndex, score: currentScore, timeTaken: 3 },
+          payload: {
+            playerId,
+            answerIndex,
+            score: 10,
+            timeTaken: 3,
+          },
         });
       } catch (e) {
-        console.error('Supabase Error:', e);
+        console.error('Supabase broadcast error:', e);
       }
 
-      // משמיע שהתשובה נקלטה וממשיך לחכות לתשובה הבאה (ללא ניתוק!)
-      return new Response(`read=t-תשובתך נקלטה. לשאלה הבאה הקש 1 2 3 או 4=answer,no,1,1,15,Digits,no,yes,1234&pin=${pin}&joined=1&score=${currentScore}`, {
-        headers: { 'Content-Type': 'text/plain; charset=utf-8' },
-      });
+      // מאשר שהתשובה נקלטה ומחזיר מיד להמתנה לשאלה הבאה (ללא אישורים וללא ניתוק)
+      return new Response(
+        `read=t-תשובתך נקלטה. לשאלה הבאה הקש 1 2 3 או 4=answer,no,1,1,10,Digits,no,yes,1234&pin=${pin}`,
+        { headers: { 'Content-Type': 'text/plain; charset=utf-8' } }
+      );
     }
 
-    // ברירת מחדל למקרה שאין ניתוק מפורש
-    return new Response(`read=t-אנא הקש תשובה=answer,no,1,1,15,Digits,no,yes,1234&pin=${pin}&joined=1`, {
+    return new Response('hangup=yes', {
       headers: { 'Content-Type': 'text/plain; charset=utf-8' },
     });
 
   } catch (error) {
-    return new Response('id_list_message=t-אירעה שגיאה&hangup=yes', {
+    console.error('IVR Error:', error);
+    return new Response('hangup=yes', {
       headers: { 'Content-Type': 'text/plain; charset=utf-8' },
     });
   }
