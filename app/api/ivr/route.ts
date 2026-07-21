@@ -1,43 +1,6 @@
 import { NextResponse } from 'next/server';
 import { supabase } from '@/lib/supabase';
 
-// פונקציית עזר שקוראת פרמטרים גם מ-URL (GET) וגם מגוף הבקשה (POST)
-async function getParams(req: Request): Promise<Record<string, string>> {
-  const params: Record<string, string> = {};
-
-  // 1. קריאת פרמטרים מכתובת ה-URL
-  const url = new URL(req.url);
-  url.searchParams.forEach((val, key) => {
-    params[key] = val;
-  });
-
-  // 2. קריאת פרמטרים מגוף הבקשה (אם נשלח ב-POST מימות המשיח)
-  if (req.method === 'POST' || req.method === 'PUT') {
-    try {
-      const text = await req.text();
-      if (text) {
-        // ניסיון קריאה כ-form-urlencoded
-        const bodyParams = new URLSearchParams(text);
-        bodyParams.forEach((val, key) => {
-          params[key] = val;
-        });
-
-        // ניסיון קריאה כ-JSON
-        if (text.trim().startsWith('{')) {
-          const json = JSON.parse(text);
-          Object.entries(json).forEach(([k, v]) => {
-            params[k] = String(v);
-          });
-        }
-      }
-    } catch (e) {
-      console.error('Error parsing request body:', e);
-    }
-  }
-
-  return params;
-}
-
 export async function GET(req: Request) {
   return handleYemot(req);
 }
@@ -48,32 +11,34 @@ export async function POST(req: Request) {
 
 async function handleYemot(req: Request) {
   try {
-    const params = await getParams(req);
+    const url = new URL(req.url);
+    const searchParams = url.searchParams;
 
-    // קבלת המשתנים (ימות המשיח שולחת לפעמים כ-pin ולפעמים כ-val_name_pin)
-    const phone = params['ApiPhone'] || params['phone'] || '0000';
-    const pin = params['pin'] || params['val_name_pin'];
-    const answer = params['answer'] || params['val_name_answer'];
+    // קריאת הפרמטרים מימות המשיח
+    const phone = searchParams.get('ApiPhone') || searchParams.get('phone') || '0000';
+    const pin = searchParams.get('pin') || searchParams.get('val_name_pin');
+    const answer = searchParams.get('answer') || searchParams.get('val_name_answer');
+
     const playerId = `phone_${phone.slice(-4)}`;
 
-    // ----------------------------------------------------
-    // שלב 1: עוד לא הוקש PIN -> מבקשים קוד בן 6 ספרות
-    // ----------------------------------------------------
+    // -----------------------------------------------------------------
+    // שלב 1: עדיין לא הוקש PIN
+    // -----------------------------------------------------------------
     if (!pin) {
-      // no בפרמטר השני מנטרל לחלוטין את "לאישור הקש 1"
+      // no בפרמטר 3 (אישור) ו-no בפרמטר 9 (הקראה מחדש) -> 0 שאלות אישור!
       return new Response(
-        'read=t-אנא הקש את קוד המשחק בן 6 הספרות=pin,no,6,6,7,Digits,no,yes,',
+        'read=t-אנא הקש את קוד המשחק בן 6 הספרות=pin,no,6,6,7,Digits,no,no,',
         { headers: { 'Content-Type': 'text/plain; charset=utf-8' } }
       );
     }
 
-    const channel = supabase.channel(`game_${pin}`);
-
-    // ----------------------------------------------------
-    // שלב 2: הוקש PIN ועוד אין תשובה -> לרשום את השחקן בלוח!
-    // ----------------------------------------------------
+    // -----------------------------------------------------------------
+    // שלב 2: הוקש PIN, השחקן נרשם בלוח
+    // -----------------------------------------------------------------
     if (pin && !answer) {
+      // שליחה מוגנת ל-Supabase שלא תפיל את השיחה גם אם יש שגיאת רשת
       try {
+        const channel = supabase.channel(`game_${pin}`);
         await channel.send({
           type: 'broadcast',
           event: 'PLAYER_JOINED',
@@ -83,24 +48,25 @@ async function handleYemot(req: Request) {
             score: 0,
           },
         });
-      } catch (e) {
-        console.error('Supabase broadcast error:', e);
+      } catch (err) {
+        console.error('Supabase notification error:', err);
       }
 
-      // משמיע שהתחבר וממתין לתשובה (1-4). הפרמטר &pin= מדביק את הקוד להמשך השיחה!
+      // מעבר לקליטת תשובה 1-4, עם שמירת ה-PIN בתוך ה-URL להמשך השיחה
       return new Response(
-        `read=t-התחברת בהצלחה. כשתופיע שאלה הקש 1 2 3 או 4 לתשובה=answer,no,1,1,10,Digits,no,yes,1234&pin=${pin}`,
+        `read=t-התחברת בהצלחה. כשתופיע שאלה הקש 1 2 3 או 4 לתשובה=answer,no,1,1,15,Digits,no,no,1234&pin=${pin}`,
         { headers: { 'Content-Type': 'text/plain; charset=utf-8' } }
       );
     }
 
-    // ----------------------------------------------------
-    // שלב 3: הוקשה תשובה (1, 2, 3 או 4) -> לשלוח למנחה!
-    // ----------------------------------------------------
+    // -----------------------------------------------------------------
+    // שלב 3: הוקשה תשובה (1, 2, 3 או 4)
+    // -----------------------------------------------------------------
     if (pin && answer) {
       const answerIndex = parseInt(answer, 10) - 1;
 
       try {
+        const channel = supabase.channel(`game_${pin}`);
         await channel.send({
           type: 'broadcast',
           event: 'SUBMIT_ANSWER',
@@ -111,25 +77,27 @@ async function handleYemot(req: Request) {
             timeTaken: 3,
           },
         });
-      } catch (e) {
-        console.error('Supabase broadcast error:', e);
+      } catch (err) {
+        console.error('Supabase notification error:', err);
       }
 
-      // מאשר שהתשובה נקלטה ומחזיר מיד להמתנה לשאלה הבאה (ללא אישורים וללא ניתוק)
       return new Response(
-        `read=t-תשובתך נקלטה. לשאלה הבאה הקש 1 2 3 או 4=answer,no,1,1,10,Digits,no,yes,1234&pin=${pin}`,
+        `read=t-תשובתך נקלטה. לשאלה הבאה הקש 1 2 3 או 4=answer,no,1,1,15,Digits,no,no,1234&pin=${pin}`,
         { headers: { 'Content-Type': 'text/plain; charset=utf-8' } }
       );
     }
 
-    return new Response('hangup=yes', {
-      headers: { 'Content-Type': 'text/plain; charset=utf-8' },
-    });
+    return new Response(
+      `read=t-אנא הקש 1 2 3 או 4 לתשובה=answer,no,1,1,15,Digits,no,no,1234&pin=${pin}`,
+      { headers: { 'Content-Type': 'text/plain; charset=utf-8' } }
+    );
 
   } catch (error) {
-    console.error('IVR Error:', error);
-    return new Response('hangup=yes', {
-      headers: { 'Content-Type': 'text/plain; charset=utf-8' },
-    });
+    console.error('Main IVR Error:', error);
+    // גם במקרה של שגיאה כללית - לא מנתקים את השיחה!
+    return new Response(
+      'read=t-אירעה שגיאה. אנא הקש שוב את קוד המשחק=pin,no,6,6,7,Digits,no,no,',
+      { headers: { 'Content-Type': 'text/plain; charset=utf-8' } }
+    );
   }
 }
