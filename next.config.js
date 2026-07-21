@@ -1,11 +1,11 @@
-/** @type {import('next').NextPolicy} */
+/** @type {import('next').NextConfig} */
 const nextConfig = {
     eslint: {
-      // מתעלם בשלב ה-Build משגיאות ESLint
+      // מתעלם משגיאות ניסוח/גרשיים בזמן ה-Build ב-Vercel
       ignoreDuringBuilds: true,
     },
     typescript: {
-      // מתעלם בשלב ה-Build משגיאות TypeScript
+      // מתעלם מאזהרות טיפוסים קטנות בזמן ה-Build
       ignoreBuildErrors: true,
     },
   };
