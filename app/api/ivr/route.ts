@@ -13,25 +13,15 @@ async function handleYemot(req: Request) {
   try {
     const { searchParams } = new URL(req.url);
 
-    // ימות המשיח שולחת את הפרמטרים
     const phone = searchParams.get('ApiPhone') || 'Unknown';
     const pin = searchParams.get('pin');
     const answer = searchParams.get('answer');
+    const action = searchParams.get('action'); // 'join' או 'answer'
 
     const playerId = `phone_${phone.slice(-4)}`;
 
-    // --- שלב 1: עוד לא הוקש PIN ---
-    if (!pin) {
-      // read=t-הודעה=שם_משתנה,אישור(no),מקס',מין',זמן,סוג
-      const responseText = 'read=t-אנא הקש את קוד המשחק בן 6 הספרות=pin,no,6,6,7,Digits,no,no,no,';
-      return new Response(responseText, {
-        headers: { 'Content-Type': 'text/plain; charset=utf-8' },
-      });
-    }
-
-    // --- שלב 2: הוקש PIN ועוד לא הוקשה תשובה ---
-    if (pin && !answer) {
-      // עדכון השרת בלייב על הצטרפות השחקן
+    // --- מקרה 1: הצטרפות ראשונית למשחק ---
+    if (action === 'join' && pin) {
       try {
         const channel = supabase.channel(`game_${pin}`);
         await channel.send({
@@ -43,14 +33,14 @@ async function handleYemot(req: Request) {
         console.error('Supabase broadcast error:', e);
       }
 
-      const responseText = 'read=t-התחברת בהצלחה! כשתופיע שאלה הקש 1 2 3 או 4=answer,no,1,1,15,Digits,no,no,no,1234';
-      return new Response(responseText, {
+      // מעביר לשלוחה הבאה לקליטת התשובה
+      return new Response('id_list_message=t-התחברת בהצלחה למשחק&go_to_folder=/1/1', {
         headers: { 'Content-Type': 'text/plain; charset=utf-8' },
       });
     }
 
-    // --- שלב 3: הוקשה תשובה (1-4) ---
-    if (pin && answer) {
+    // --- מקרה 2: קליטת תשובה לשאלה ---
+    if (action === 'answer' && pin && answer) {
       const answerIndex = parseInt(answer, 10) - 1;
 
       try {
@@ -64,19 +54,17 @@ async function handleYemot(req: Request) {
         console.error('Supabase broadcast error:', e);
       }
 
-      const responseText = 'read=t-תשובתך נקלטה! לשאלה הבאה הקש 1 2 3 או 4=answer,no,1,1,15,Digits,no,no,no,1234';
-      return new Response(responseText, {
+      return new Response('id_list_message=t-תשובתך נקלטה בהצלחה', {
         headers: { 'Content-Type': 'text/plain; charset=utf-8' },
       });
     }
 
-    return new Response('hangup=yes', {
+    return new Response('id_list_message=t-קוד משחק לא תקין&hangup=yes', {
       headers: { 'Content-Type': 'text/plain; charset=utf-8' },
     });
 
   } catch (error) {
-    console.error('IVR Error:', error);
-    return new Response('id_list_message=t-אירעה שגיאה במערכת&hangup=yes', {
+    return new Response('hangup=yes', {
       headers: { 'Content-Type': 'text/plain; charset=utf-8' },
     });
   }
