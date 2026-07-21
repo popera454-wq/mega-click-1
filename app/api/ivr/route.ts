@@ -16,12 +16,24 @@ async function handleYemot(req: Request) {
     const phone = searchParams.get('ApiPhone') || 'Unknown';
     const pin = searchParams.get('pin');
     const answer = searchParams.get('answer');
-    const action = searchParams.get('action'); // 'join' או 'answer'
+    const joined = searchParams.get('joined');
+    const scoreParam = searchParams.get('score');
 
+    let currentScore = scoreParam ? parseInt(scoreParam, 10) : 0;
     const playerId = `phone_${phone.slice(-4)}`;
 
-    // --- מקרה 1: הצטרפות ראשונית למשחק ---
-    if (action === 'join' && pin) {
+    // --- שלב 1: עוד לא הוקש PIN ---
+    if (!pin) {
+      // מקריא: "אנא הקש את קוד המשחק..."
+      // הפורמט שומר על קליטה נקייה ללא שום שאלת אישור!
+      return new Response('read=t-אנא הקש את קוד המשחק בן 6 הספרות=pin,no,6,6,7,Digits,no,no,no,', {
+        headers: { 'Content-Type': 'text/plain; charset=utf-8' },
+      });
+    }
+
+    // --- שלב 2: הוקש PIN קודם, והשחקן מחובר עכשיו לראשונה ---
+    if (pin && !answer && !joined) {
+      // רישום השחקן בבלייב ב-Supabase!
       try {
         const channel = supabase.channel(`game_${pin}`);
         await channel.send({
@@ -30,36 +42,40 @@ async function handleYemot(req: Request) {
           payload: { id: playerId, name: `טלפון ${phone.slice(-4)}`, score: 0 },
         });
       } catch (e) {
-        console.error('Supabase broadcast error:', e);
+        console.error('Supabase Error:', e);
       }
 
-      // מעביר לשלוחה הבאה לקליטת התשובה
-      return new Response('id_list_message=t-התחברת בהצלחה למשחק&go_to_folder=/1/1', {
+      // משמיע "התחברת בהצלחה" ועובר לקלוט תשובה.
+      // שים לב שנוסף בסוף &pin=${pin}&joined=1 – זה מה שמונע את הבלופים!
+      return new Response(`read=t-התחברת בהצלחה. כשתופיע שאלה הקש 1 2 3 או 4 לתשובה=answer,no,1,1,15,Digits,no,no,no,1234&pin=${pin}&joined=1&score=0`, {
         headers: { 'Content-Type': 'text/plain; charset=utf-8' },
       });
     }
 
-    // --- מקרה 2: קליטת תשובה לשאלה ---
-    if (action === 'answer' && pin && answer) {
+    // --- שלב 3: הוקשה תשובה (1-4) ---
+    if (pin && answer) {
       const answerIndex = parseInt(answer, 10) - 1;
+      currentScore += 10;
 
+      // שידור התשובה ב-Realtime ללוח המנחה
       try {
         const channel = supabase.channel(`game_${pin}`);
         await channel.send({
           type: 'broadcast',
           event: 'SUBMIT_ANSWER',
-          payload: { playerId, answerIndex, score: 10, timeTaken: 3 },
+          payload: { playerId, answerIndex, score: currentScore, timeTaken: 3 },
         });
       } catch (e) {
-        console.error('Supabase broadcast error:', e);
+        console.error('Supabase Error:', e);
       }
 
-      return new Response('id_list_message=t-תשובתך נקלטה בהצלחה', {
+      // משמיע "תשובתך נקלטה" ומחזיר לקלוט את התשובה לשאלה הבאה (בשרשרת)
+      return new Response(`read=t-תשובתך נקלטה. לשאלה הבאה הקש את תשובתך=answer,no,1,1,15,Digits,no,no,no,1234&pin=${pin}&joined=1&score=${currentScore}`, {
         headers: { 'Content-Type': 'text/plain; charset=utf-8' },
       });
     }
 
-    return new Response('id_list_message=t-קוד משחק לא תקין&hangup=yes', {
+    return new Response('hangup=yes', {
       headers: { 'Content-Type': 'text/plain; charset=utf-8' },
     });
 
