@@ -44,7 +44,7 @@ async function handleYemot(req: Request) {
     // ----------------------------------------------------
     if (!pin) {
       return new Response(
-        'read=t-אנא הקש את קוד המשחק בן 6 הספרות=pin,no,6,6,10,Digits,no,no,',
+        'read=t- אנא הקש את קוד המשחק בן 6 הספרות ובסיום הקש סולמית=pin,no,6,6,10,Digits,no,no,',
         { headers: { 'Content-Type': 'text/plain; charset=utf-8' } }
       );
     }
