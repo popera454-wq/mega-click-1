@@ -1,104 +1,114 @@
 import { NextResponse } from 'next/server';
 import { supabase } from '@/lib/supabase';
 
-export async function GET(req: Request) {
-  return handleYemot(req);
+// פונקציה חזקה לקריאת נתונים מימות המשיח
+async function getIncomingData(req: Request) {
+  const url = new URL(req.url);
+  const data: Record<string, string> = {};
+  url.searchParams.forEach((val, key) => (data[key] = val));
+  return data;
 }
 
-export async function POST(req: Request) {
-  return handleYemot(req);
-}
+export async function GET(req: Request) { return handleYemotV2(req); }
+export async function POST(req: Request) { return handleYemotV2(req); }
 
-async function handleYemot(req: Request) {
+async function handleYemotV2(req: Request) {
   try {
-    const url = new URL(req.url);
-    const searchParams = url.searchParams;
+    const data = await getIncomingData(req);
 
-    // קבלת פרמטרים בסיסיים מימות המשיח
-    const phone = searchParams.get('ApiPhone') || searchParams.get('phone') || 'Unknown';
-    let pin = searchParams.get('pin') || searchParams.get('val_name_pin');
-    const answer = searchParams.get('answer') || searchParams.get('val_name_answer');
+    // חילוץ טלפון (קריטי למערכת החדשה)
+    const phone = data['ApiPhone'] || data['phone'] || 'Unknown';
+    
+    // שינוי שמות המשתנים כדי לאתחל את המוח של ימות המשיח
+    const inputPin = data['q_pin'] || data['val_name_q_pin'];
+    const inputAns = data['q_ans'] || data['val_name_q_ans'];
 
-    const playerId = `phone_${phone.slice(-4)}`;
+    // 1. בודקים האם השחקן כבר קיים בטבלה (לפי הטלפון שלו!)
+    const { data: existingPlayer } = await supabase
+      .from('game_players')
+      .select('game_pin')
+      .eq('phone', phone)
+      .order('created_at', { ascending: false })
+      .limit(1)
+      .single();
 
-    // --- 1. אם הוקש PIN חדש -> נשמור אותו ב-Supabase משודך למספר הטלפון ---
-    if (pin) {
-      await supabase
-        .from('ivr_sessions')
-        .upsert({ phone, pin }, { onConflict: 'phone' });
-    } else {
-      // --- 2. אם לא נשלח PIN -> נשלוף את ה-PIN השמור לפי מספר הטלפון ---
-      const { data: session } = await supabase
-        .from('ivr_sessions')
-        .select('pin')
-        .eq('phone', phone)
-        .maybeSingle();
-
-      if (session?.pin) {
-        pin = session.pin;
-      }
-    }
+    // הקוד של המשחק הוא או מה שהוא הקליד עכשיו, או מה ששמור לו במסד הנתונים
+    const activeGamePin = inputPin || existingPlayer?.game_pin;
 
     // ----------------------------------------------------
-    // מקרה A: עדיין אין PIN (לא בבקשה ולא בבסיס הנתונים)
+    // מצב 1: משתמש חדש לגמרי, אין לו קוד בטבלה והוא לא הקליד
     // ----------------------------------------------------
-    if (!pin) {
+    if (!activeGamePin) {
       return new Response(
-        'read=t- אנא הקש את קוד המשחק בן 6 הספרות ובסיום הקש סולמית=pin,no,6,6,10,Digits,no,no,',
+        'read=t-שלום לך! הגעת למערכת הטריוויה. הקש עכשיו את קוד האירוע בעל שש ספרות=q_pin,no,6,6,10,Digits,no,no,',
         { headers: { 'Content-Type': 'text/plain; charset=utf-8' } }
       );
     }
 
     // ----------------------------------------------------
-    // מקרה B: המשתמש מחובר לראשונה (הוקש PIN אך עדיין אין תשובה)
+    // מצב 2: משתמש הרגע הקיש קוד PIN (נרשם)
     // ----------------------------------------------------
-    if (pin && !answer) {
-      // דיווח ללוח המנחה בשרת
-      supabase
-        .channel(`game_${pin}`)
-        .send({
-          type: 'broadcast',
-          event: 'PLAYER_JOINED',
-          payload: { id: playerId, name: `טלפון ${phone.slice(-4)}`, score: 0 },
-        })
-        .catch((e) => console.error('Supabase broadcast error:', e));
+    if (inputPin) {
+      // שומרים את השחקן פיזית בטבלה החדשה!
+      await supabase.from('game_players').upsert({
+        game_pin: inputPin,
+        phone: phone,
+        player_name: `משתתף ${phone.slice(-4)}`
+      }, { onConflict: 'game_pin,phone' });
+
+      // משדרים למסך (אופציונלי, בשביל הלייב)
+      supabase.channel(`game_${inputPin}`).send({
+        type: 'broadcast',
+        event: 'PLAYER_JOINED',
+        payload: { id: `phone_${phone.slice(-4)}`, name: `טלפון ${phone.slice(-4)}`, score: 0 }
+      }).catch(() => {});
 
       return new Response(
-        'read=t-התחברת בהצלחה. כשתופיע שאלה הקש 1 2 3 או 4 לתשובה=answer,no,1,1,15,Digits,no,no,1234',
+        'read=t-נרשמת בהצלחה למשחק! ברגע שהמנחה מציג שאלה, הקש את מספר התשובה שלך=q_ans,no,1,1,15,Digits,no,no,',
         { headers: { 'Content-Type': 'text/plain; charset=utf-8' } }
       );
     }
 
     // ----------------------------------------------------
-    // מקרה C: הוקשה תשובה (1, 2, 3 או 4)
+    // מצב 3: משתמש מחובר (יש לו PIN בטבלה) והקיש תשובה
     // ----------------------------------------------------
-    if (pin && answer) {
-      const answerIndex = parseInt(answer, 10) - 1;
+    if (inputAns && activeGamePin) {
+      const numericAns = parseInt(inputAns, 10);
 
-      // דיווח התשובה ללוח המנחה
-      supabase
-        .channel(`game_${pin}`)
-        .send({
-          type: 'broadcast',
-          event: 'SUBMIT_ANSWER',
-          payload: { playerId, answerIndex, score: 10, timeTaken: 3 },
-        })
-        .catch((e) => console.error('Supabase broadcast error:', e));
+      // שומרים את התשובה פיזית בטבלה!
+      await supabase.from('game_answers').insert({
+        game_pin: activeGamePin,
+        phone: phone,
+        answer_index: numericAns - 1
+      });
 
+      // משדרים למסך לייב
+      supabase.channel(`game_${activeGamePin}`).send({
+        type: 'broadcast',
+        event: 'SUBMIT_ANSWER',
+        payload: { playerId: `phone_${phone.slice(-4)}`, answerIndex: numericAns - 1, score: 10, timeTaken: 3 }
+      }).catch(() => {});
+
+      // מחזירים אותו להמתנה לשאלה הבאה
       return new Response(
-        'read=t-תשובתך נקלטה. לשאלה הבאה הקש 1 2 3 או 4=answer,no,1,1,15,Digits,no,no,1234',
+        'read=t-מצוין, התשובה התקבלה! לשאלה הבאה פשוט הקש שוב את המספר=q_ans,no,1,1,15,Digits,no,no,',
         { headers: { 'Content-Type': 'text/plain; charset=utf-8' } }
       );
     }
 
-    return new Response('hangup=yes', {
-      headers: { 'Content-Type': 'text/plain; charset=utf-8' },
-    });
+    // ----------------------------------------------------
+    // מצב 4: גיבוי נגד ניתוקים - משתמש רשום שנפל בין הכיסאות
+    // ----------------------------------------------------
+    return new Response(
+      'read=t-אנחנו ממתינים לתשובה שלך. הקש ספרה=q_ans,no,1,1,15,Digits,no,no,',
+      { headers: { 'Content-Type': 'text/plain; charset=utf-8' } }
+    );
 
   } catch (error) {
-    console.error('IVR Critical Error:', error);
+    console.error('SERVER ERROR V2:', error);
+    // לעולם לא מנתקים!
     return new Response(
-      'read=t-אנא הקש את קוד המשחק בן 6 הספרות=pin,no,6,6,10,Digits,no,no,',
+      'read=t-הייתה תקלה קטנה. נא להקיש שוב את קוד המשחק=q_pin,no,6,6,10,Digits,no,no,',
       { headers: { 'Content-Type': 'text/plain; charset=utf-8' } }
     );
   }
