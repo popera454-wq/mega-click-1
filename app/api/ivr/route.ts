@@ -1,55 +1,54 @@
 import { NextResponse } from 'next/server';
 import { supabase } from '@/lib/supabase';
 
-/**
- * Webhook עבור מערכת טלפונית (תומך ב-Twilio / ימות המשיח)
- * המערכת מקבלת את מקשי המשתמש (Digits / DTMF) ומזרימה אותם לחיבור ה-Realtime של המנחה.
- */
+export async function GET(req: Request) {
+  return handleYemotRequest(req);
+}
+
 export async function POST(req: Request) {
+  return handleYemotRequest(req);
+}
+
+async function handleYemotRequest(req: Request) {
   try {
-    const body = await req.json();
-    const { pin, callerPhone, digitPressed, timeTaken } = body;
+    const { searchParams } = new URL(req.url);
 
-    if (!pin || !digitPressed) {
-      return NextResponse.json(
-        { success: false, message: 'חסרים נתונים' },
-        { status: 400 }
-      );
+    // ימות המשיח שולחת את הפרמטרים בפרמטרים הבאים:
+    const phone = searchParams.get('ApiPhone') || 'phone_user';
+    const pin = searchParams.get('pin');
+    const answer = searchParams.get('answer');
+
+    if (!pin || !answer) {
+      // אם חסרים נתונים - מחזירים הוראה לימות המשיח להקריא הודעת שגיאה
+      return new Response('id_list_message=t-חסרים נתונים, אנא נסה שנית', {
+        headers: { 'Content-Type': 'text/plain; charset=utf-8' },
+      });
     }
 
-    // מיפוי מקש 1-4 למפתח תשובה 0-3
-    const answerIndex = parseInt(digitPressed, 10) - 1;
+    // המרת מקש 1-4 למפתח תשובה 0-3
+    const answerIndex = parseInt(answer, 10) - 1;
 
-    if (answerIndex < 0 || answerIndex > 3) {
-      return NextResponse.json(
-        { success: false, message: 'מקש לא תקין' },
-        { status: 400 }
-      );
-    }
-
-    // שליחת התשובה הטלפונית ישירות לערוץ המשחק ב-Realtime של Supabase
+    // שידור ב-Realtime ללוח המנחה
     const channel = supabase.channel(`game_${pin}`);
 
     await channel.send({
       type: 'broadcast',
       event: 'SUBMIT_ANSWER',
       payload: {
-        playerId: `phone_${
-          callerPhone || Math.random().toString().slice(2, 6)
-        }`,
+        playerId: `phone_${phone.slice(-4)}`,
         answerIndex,
-        timeTaken: timeTaken || 5,
+        timeTaken: 5,
       },
     });
 
-    return NextResponse.json({
-      success: true,
-      message: 'תשובה טלפונית התקבלה ועודכנה בלייב',
+    // תשובה חיובית לימות המשיח (הקראת טקסט או השמעת הודעה)
+    return new Response('id_list_message=t-תשובתך נקלטה בהצלחה', {
+      headers: { 'Content-Type': 'text/plain; charset=utf-8' },
     });
-  } catch (err: any) {
-    return NextResponse.json(
-      { success: false, error: err.message },
-      { status: 500 }
-    );
+
+  } catch (err) {
+    return new Response('id_list_message=t-אירעה שגיאה בשרת', {
+      headers: { 'Content-Type': 'text/plain; charset=utf-8' },
+    });
   }
 }
