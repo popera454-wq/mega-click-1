@@ -30,7 +30,7 @@ async function handleYemot(req: Request) {
     // שלב 2: הלקוח הקיש PIN, אבל עדיין אין לו תשובה
     if (pin && !answer) {
       // ההוראה לימות המשיח: להשמיע קובץ 1001 ולקלוט 1 ספרה (רק 1,2,3,4 מותרים)
-      return new Response('read=f-1001=answer,no,1,1,7,1234', {
+      return new Response('read=f-000=answer,no,1,1,7,1234', {
         headers: { 'Content-Type': 'text/plain; charset=utf-8' },
       });
     }
