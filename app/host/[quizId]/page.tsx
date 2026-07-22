@@ -17,7 +17,7 @@ interface Player {
   id: string;
   name: string;
   score: number;
-  phone?: string;
+  phone: string;
   lastAnswerIndex?: number;
 }
 
@@ -53,7 +53,7 @@ export default function HostGamePage({
   const channelRef = useRef<any>(null);
   const timerRef = useRef<any>(null);
 
-  // 1. טעינת מידע על החידון
+  // 1. טעינת החידון והשאלות
   useEffect(() => {
     const initHost = async () => {
       const { data: { user } } = await supabase.auth.getUser();
@@ -82,7 +82,7 @@ export default function HostGamePage({
     initHost();
   }, [quizId, router]);
 
-  // 2. פונקציית טעינת שחקנים מטבלת game_players
+  // 2. פונקציית טעינת שחקנים מה-DB תוך שמירה על הניקוד הקיים בזיכרון
   const fetchDbPlayers = async () => {
     const { data } = await supabase
       .from('game_players')
@@ -92,11 +92,12 @@ export default function HostGamePage({
     if (data) {
       setPlayers((prev) => {
         return data.map((dbP) => {
-          const existing = prev.find((p) => p.phone === dbP.phone || p.name === dbP.player_name);
+          const playerPhone = dbP.phone || dbP.id;
+          const existing = prev.find((p) => p.phone === playerPhone || p.id === dbP.id);
           return {
-            id: dbP.id || dbP.phone,
-            name: dbP.player_name || `שחקן ${dbP.phone.slice(-4)}`,
-            phone: dbP.phone,
+            id: dbP.id || playerPhone,
+            phone: playerPhone,
+            name: dbP.player_name || `שחקן ${playerPhone.slice(-4)}`,
             score: existing ? existing.score : 0,
             lastAnswerIndex: existing ? existing.lastAnswerIndex : undefined,
           };
@@ -105,13 +106,13 @@ export default function HostGamePage({
     }
   };
 
-  // 3. סנכרון בזמן אמת + פולינג גיבוי בלובי
+  // 3. חיבור ל-Realtime והאזנה לתשובות מהטלפון/אתר
   useEffect(() => {
     if (loading) return;
 
     fetchDbPlayers();
 
-    // Polling כל 2 שניות בלובי כדי להתגבר על בעיות Realtime
+    // רענון רקע תקופתי לגיבוי
     const interval = setInterval(() => {
       if (gameState === 'LOBBY' || gameState === 'QUESTION') {
         fetchDbPlayers();
@@ -120,7 +121,15 @@ export default function HostGamePage({
 
     const channel = supabase.channel(`game_${pinCode}`);
 
-    // האזנה להצטרפות ב-Realtime
+    // האזנה לתשובות מהאתר בלייב ב-Broadcast
+    channel.on('broadcast', { event: 'SUBMIT_ANSWER' }, ({ payload }) => {
+      handleAnswerSubmitted(payload.playerId, payload.answerIndex, payload.timeTaken);
+    });
+
+    channel.subscribe();
+    channelRef.current = channel;
+
+    // האזנה לטבלאות ב-DB (הצטרפות + תשובות קוליות)
     const dbSub = supabase
       .channel(`db_changes_${pinCode}`)
       .on(
@@ -133,32 +142,33 @@ export default function HostGamePage({
         { event: 'INSERT', schema: 'public', table: 'game_answers', filter: `game_pin=eq.${pinCode}` },
         (payload) => {
           const ans = payload.new;
-          handleAnswerSubmitted(ans.phone, ans.answer_index, 5);
+          handleAnswerSubmitted(ans.phone, ans.answer_index, 5); // מתן זמן ממוצע
         }
       )
       .subscribe();
-
-    channelRef.current = channel;
 
     return () => {
       clearInterval(interval);
       supabase.removeChannel(channel);
       supabase.removeChannel(dbSub);
     };
-  }, [pinCode, loading, gameState]);
+  }, [pinCode, loading, gameState, currentQuestionIndex]);
 
-  // חישוב תשובות
+  // 4. פונקציית חישוב ניקוד אחידה ומתוקנת!
   const handleAnswerSubmitted = (identifier: string, answerIndex: number, timeTaken: number) => {
     const currentQ = questions[currentQuestionIndex];
 
     setPlayers((prevPlayers) => {
       return prevPlayers.map((p) => {
+        // התאמה גם לפי ה-phone וגם לפי ה-id למניעת סתירות
         if (p.phone === identifier || p.id === identifier) {
-          if (p.lastAnswerIndex !== undefined) return p;
+          if (p.lastAnswerIndex !== undefined) return p; // מניעת ספירה כפולה
+
           const isCorrect = answerIndex === currentQ.correct_option;
           const bonus = isCorrect
             ? Math.max(200, Math.round(1000 * (1 - timeTaken / (currentQ.time_limit || 20))))
             : 0;
+
           return {
             ...p,
             score: p.score + bonus,
@@ -172,7 +182,7 @@ export default function HostGamePage({
     setAnswersCount((prev) => prev + 1);
   };
 
-  // מנגנון טיימר
+  // מנגנון הטיימר
   useEffect(() => {
     if (gameState === 'QUESTION' && timeLeft > 0) {
       timerRef.current = setInterval(() => {
@@ -199,6 +209,7 @@ export default function HostGamePage({
     setTimeLeft(questions[index].time_limit || 20);
     setGameState('QUESTION');
 
+    // איפוס סימון תשובות קודמות
     setPlayers((prev) => prev.map((p) => ({ ...p, lastAnswerIndex: undefined })));
 
     channelRef.current?.send({
@@ -228,13 +239,16 @@ export default function HostGamePage({
 
   const showLeaderboard = () => setGameState('LEADERBOARD');
 
-  // סיום המשחק וניקוי הטבלאות ב-Supabase!
+  // 🧹 ניקוי מלא ומוחלט של כל נתוני המשחק מכל הטבלאות ב-Supabase!
   const finishGameCleanup = async () => {
     setGameState('GAME_OVER');
-    
-    // מחיקת השחקנים והתשובות של המשחק הנוכחי מהטבלאות ב-DB
+
+    // 1. מחיקת שחקנים בטבלת game_players
     await supabase.from('game_players').delete().eq('game_pin', pinCode);
+    // 2. מחיקת תשובות בטבלת game_answers
     await supabase.from('game_answers').delete().eq('game_pin', pinCode);
+    // 3. מחיקת סשנים קוליים בטבלת ivr_sessions
+    await supabase.from('ivr_sessions').delete().eq('pin', pinCode);
 
     channelRef.current?.send({
       type: 'broadcast',
