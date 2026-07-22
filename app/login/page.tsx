@@ -23,17 +23,20 @@ export default function LoginPage() {
 
   // Handle Google / Hash tokens redirect automatically on load
   useEffect(() => {
-    // Check if user is already logged in or if tokens exist in URL hash
     const handleAuthRedirect = async () => {
-      const { data: { session } } = await supabase.auth.getSession();
+      // Supabase automatically parses hash tokens if present in the URL
+      const { data: { session }, error } = await supabase.auth.getSession();
       if (session) {
         router.push('/dashboard');
+      }
+      if (error) {
+        console.error('Auth session error:', error.message);
       }
     };
 
     handleAuthRedirect();
 
-    // Listen to auth state changes (e.g. when OAuth tokens are processed from URL hash)
+    // Listen to auth state changes
     const { data: { subscription } } = supabase.auth.onAuthStateChange((event, session) => {
       if (session && (event === 'SIGNED_IN' || event === 'TOKEN_REFRESHED')) {
         router.push('/dashboard');
