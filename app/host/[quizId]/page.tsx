@@ -36,47 +36,63 @@ export default function HostQuizPage({ params }: { params: { id: string } }) {
   const [currentQuestionIndex, setCurrentQuestionIndex] = useState(0);
   const [timeLeft, setTimeLeft] = useState(20);
   const [isTimerActive, setIsTimerActive] = useState(false);
-
-  // Connected Players Mock / State (ready for Realtime integration)
   const [participantsCount, setParticipantsCount] = useState(0);
 
   useEffect(() => {
+    let isMounted = true;
+
     const fetchQuizAndQuestions = async () => {
-      setLoading(true);
-      const { data: { user } } = await supabase.auth.getUser();
-      if (!user) {
-        router.push('/login');
-        return;
+      try {
+        // מנגנון הגנה: אם השרת מתעכב מעל 3 שניות, נשחרר את הטעינה בכוח כדי למנוע תקיעה
+        const timeoutId = setTimeout(() => {
+          if (isMounted && loading) {
+            console.warn('Loading timed out, forcing render...');
+            setLoading(false);
+          }
+        }, 3000);
+
+        // שליפת נתוני החידון
+        const { data: quizData, error: quizErr } = await supabase
+          .from('quizzes')
+          .select('*')
+          .eq('id', quizId)
+          .single();
+
+        if (quizErr || !quizData) {
+          console.error('Quiz fetch error:', quizErr);
+          alert('החידון לא נמצא במסד הנתונים');
+          router.push('/dashboard');
+          return;
+        }
+
+        if (isMounted) setQuiz(quizData);
+
+        // שליפת השאלות
+        const { data: qData, error: qErr } = await supabase
+          .from('questions')
+          .select('*')
+          .eq('quiz_id', quizId)
+          .order('created_at', { ascending: true });
+
+        if (!qErr && qData && isMounted) {
+          setQuestions(qData);
+        }
+
+        clearTimeout(timeoutId);
+      } catch (err) {
+        console.error('Unexpected error loading host page:', err);
+      } finally {
+        if (isMounted) setLoading(false);
       }
-
-      const { data: quizData, error: quizErr } = await supabase
-        .from('quizzes')
-        .select('*')
-        .eq('id', quizId)
-        .single();
-
-      if (quizErr || !quizData) {
-        alert('החידון לא נמצא');
-        router.push('/dashboard');
-        return;
-      }
-
-      setQuiz(quizData);
-
-      const { data: qData, error: qErr } = await supabase
-        .from('questions')
-        .select('*')
-        .eq('quiz_id', quizId)
-        .order('created_at', { ascending: true });
-
-      if (!qErr && qData) {
-        setQuestions(qData);
-      }
-
-      setLoading(false);
     };
 
-    if (quizId) fetchQuizAndQuestions();
+    if (quizId) {
+      fetchQuizAndQuestions();
+    }
+
+    return () => {
+      isMounted = false;
+    };
   }, [quizId, router]);
 
   // Timer Countdown Logic
@@ -133,14 +149,14 @@ export default function HostQuizPage({ params }: { params: { id: string } }) {
       <header className="flex items-center justify-between border-b border-white/10 bg-[#130728]/90 px-8 py-5 backdrop-blur-2xl shadow-2xl z-20">
         <div className="flex items-center gap-4">
           <Link
-            href={`/dashboard/quiz/${quizId}`}
+            href={`/dashboard`}
             className="px-4 py-2 rounded-xl bg-white/5 hover:bg-white/10 text-white/70 hover:text-white transition-all text-xs font-bold border border-white/5"
           >
-            ← חזרה לעריכת השאלות
+            ← חזרה לדשבורד
           </Link>
           <div className="h-6 w-[1px] bg-white/10 hidden sm:block" />
           <h1 className="text-lg font-black bg-gradient-to-r from-fuchsia-200 to-white bg-clip-text text-transparent truncate max-w-[250px] md:max-w-md">
-            {quiz?.title}
+            {quiz?.title || 'חידון חדש'}
           </h1>
         </div>
 
@@ -160,7 +176,6 @@ export default function HostQuizPage({ params }: { params: { id: string } }) {
         {/* ================= LOBBY SCREEN ================= */}
         {gameStep === 'lobby' && (
           <div className="w-full grid grid-cols-1 lg:grid-cols-12 gap-8 items-center animate-fade-in">
-            {/* Left Box: Instructions for Joining */}
             <div className="lg:col-span-7 glass neon rounded-3xl p-8 md:p-12 border border-white/15 shadow-2xl relative overflow-hidden text-center lg:text-right">
               <div className="absolute top-0 left-0 w-96 h-96 bg-fuchsia-600/10 rounded-full blur-3xl pointer-events-none" />
               
@@ -204,7 +219,6 @@ export default function HostQuizPage({ params }: { params: { id: string } }) {
               )}
             </div>
 
-            {/* Right Box: Quiz Info Card */}
             <div className="lg:col-span-5 glass rounded-3xl p-8 border border-white/10 text-center flex flex-col items-center justify-center shadow-xl">
               <div className="w-20 h-20 rounded-3xl bg-gradient-to-tr from-fuchsia-500/20 to-violet-500/20 border border-fuchsia-500/30 flex items-center justify-center text-fuchsia-300 mb-6 shadow-inner">
                 <svg className="w-10 h-10 animate-bounce" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -212,7 +226,7 @@ export default function HostQuizPage({ params }: { params: { id: string } }) {
                 </svg>
               </div>
               <h3 className="text-2xl font-bold mb-2">{quiz?.title}</h3>
-              <p className="text-white/60 text-xs leading-relaxed mb-6 font-light">{quiz?.description || 'אין תפרוסת מוגדרת'}</p>
+              <p className="text-white/60 text-xs leading-relaxed mb-6 font-light">{quiz?.description || 'אין תיאור מוגדר'}</p>
               <div className="text-xs px-4 py-2 rounded-xl bg-white/5 text-white/70 font-medium">
                 סה״כ שאלות מוכנות: <strong className="text-fuchsia-300">{questions.length}</strong>
               </div>
@@ -220,10 +234,9 @@ export default function HostQuizPage({ params }: { params: { id: string } }) {
           </div>
         )}
 
-        {/* ================= QUESTION SCREEN ================= --> */}
+        {/* ================= QUESTION SCREEN ================= */}
         {gameStep === 'question' && currentQ && (
           <div className="w-full max-w-4xl flex flex-col items-center animate-scale-up">
-            {/* Top Bar inside question */}
             <div className="w-full flex items-center justify-between mb-8">
               <span className="text-xs font-bold px-4 py-2 rounded-xl bg-white/10 text-fuchsia-200 border border-white/5">
                 שאלה {currentQuestionIndex + 1} מתוך {questions.length} ({
@@ -234,7 +247,6 @@ export default function HostQuizPage({ params }: { params: { id: string } }) {
                 })
               </span>
 
-              {/* Timer Circle */}
               <div className="w-16 h-16 rounded-2xl bg-gradient-to-tr from-fuchsia-600 to-violet-600 p-0.5 shadow-xl shadow-fuchsia-500/30 flex items-center justify-center">
                 <div className="w-full h-full bg-[#130728] rounded-[14px] flex items-center justify-center">
                   <span className={`text-xl font-black ${timeLeft <= 5 ? 'text-red-400 animate-bounce' : 'text-white'}`}>
@@ -244,14 +256,12 @@ export default function HostQuizPage({ params }: { params: { id: string } }) {
               </div>
             </div>
 
-            {/* Question Text Box */}
             <div className="w-full glass neon rounded-3xl p-8 md:p-10 border border-white/15 text-center mb-8 shadow-2xl relative overflow-hidden">
               <h2 className="text-2xl md:text-4xl font-black tracking-tight text-white leading-relaxed">
                 {currentQ.question_text}
               </h2>
             </div>
 
-            {/* Options Grid Layout */}
             {currentQ.question_type === 'range' ? (
               <div className="w-full glass rounded-3xl p-10 text-center border border-fuchsia-500/30 bg-fuchsia-950/20">
                 <p className="text-lg font-bold text-fuchsia-200 mb-2">📊 שאלה מספרית / טווח</p>
@@ -281,7 +291,6 @@ export default function HostQuizPage({ params }: { params: { id: string } }) {
               </div>
             )}
 
-            {/* Control button to force skip to leaderboard */}
             <div className="mt-8">
               <button
                 onClick={nextStep}
@@ -301,12 +310,11 @@ export default function HostQuizPage({ params }: { params: { id: string } }) {
             </span>
             <h2 className="text-3xl md:text-4xl font-black mb-6">המובילים בסיבוב הנוכחי</h2>
 
-            {/* Mock Leaderboard list */}
             <div className="space-y-3 mb-8">
               {[
-                { name: 'מתשתף #4920', score: 1200, rank: 1 },
-                { name: 'מתשתף #1084', score: 950, rank: 2 },
-                { name: 'מתשתף #7731', score: 800, rank: 3 },
+                { name: 'משתתף #4920', score: 1200, rank: 1 },
+                { name: 'משתתף #1084', score: 950, rank: 2 },
+                { name: 'משתתף #7731', score: 800, rank: 3 },
               ].map((item) => (
                 <div key={item.rank} className="p-4 rounded-2xl bg-white/5 border border-white/10 flex items-center justify-between">
                   <div className="flex items-center gap-3">
@@ -333,7 +341,6 @@ export default function HostQuizPage({ params }: { params: { id: string } }) {
 
       </div>
 
-      {/* Bottom Footer info */}
       <footer className="text-center py-4 text-xs text-white/30 border-t border-white/5">
         MegaClick Live Host System • חיוג למערכת: 0772661266
       </footer>
