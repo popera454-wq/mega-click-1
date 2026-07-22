@@ -1,584 +1,423 @@
-'use client';
+"use client";
 
-import React, { useState, useEffect, useRef, useCallback } from 'react';
-import Link from 'next/link';
-import { useRouter, useParams } from 'next/navigation';
-import { supabase } from '@/lib/supabase';
-import { RealtimeChannel } from '@supabase/supabase-js';
+import { useEffect, useState, use } from "react";
+import { supabase } from "@/lib/supabase";
+import { useRouter } from "next/navigation";
 
 interface Question {
   id: string;
   question_text: string;
-  options: string[] | string;
-  correct_option: number;
-  time_limit: number;
+  options: string[];
+  correct_answer_index: number;
+  time_limit?: number;
+}
+
+interface Quiz {
+  id: string;
+  title: string;
+  questions: Question[];
 }
 
 interface Player {
-  id: string;
-  name: string;
-  score: number;
   phone: string;
-  lastAnswerIndex?: number;
+  player_name: string;
+  score: number;
 }
 
-type GameState =
-  | 'LOBBY'
-  | 'QUESTION'
-  | 'SHOW_RESULT'
-  | 'LEADERBOARD'
-  | 'GAME_OVER';
+interface Answer {
+  phone: string;
+  question_index: number;
+  answer_index: number;
+  score_awarded: number;
+}
 
-export default function HostGamePage() {
+export default function HostGamePage({
+  params,
+}: {
+  params: Promise<{ quizId: string }>;
+}) {
+  const resolvedParams = use(params);
+  const quizId = resolvedParams.quizId;
   const router = useRouter();
-  const routeParams = useParams();
-  const quizId = (routeParams?.quizId as string) || '';
 
-  const [pinCode] = useState(() =>
-    Math.floor(100000 + Math.random() * 900000).toString()
-  );
-  const [gameState, setGameState] = useState<GameState>('LOBBY');
-
-  const [quizTitle, setQuizTitle] = useState('');
-  const [questions, setQuestions] = useState<Question[]>([]);
-  const [currentQuestionIndex, setCurrentQuestionIndex] = useState(0);
+  const [quiz, setQuiz] = useState<Quiz | null>(null);
+  const [gamePin, setGamePin] = useState<string | null>(null);
+  const [status, setStatus] = useState<"lobby" | "active" | "showing_results" | "finished">("lobby");
+  const [currentQIndex, setCurrentQIndex] = useState<number>(0);
   const [players, setPlayers] = useState<Player[]>([]);
-
-  const [timeLeft, setTimeLeft] = useState(20);
-  const [answersCount, setAnswersCount] = useState(0);
+  const [answers, setAnswers] = useState<Answer[]>([]);
+  const [timeLeft, setTimeLeft] = useState<number>(30);
   const [loading, setLoading] = useState(true);
 
-  const channelRef = useRef<RealtimeChannel | null>(null);
-  const timerRef = useRef<NodeJS.Timeout | null>(null);
-  const questionStartTimeRef = useRef<number>(Date.now());
-
-  // פונקציית עזר לפריסת המערך בבטחה
-  const getParsedOptions = (options: string[] | string | undefined): string[] => {
-    if (!options) return [];
-    if (Array.isArray(options)) return options;
-    if (typeof options === 'string') {
-      try {
-        const parsed = JSON.parse(options);
-        return Array.isArray(parsed) ? parsed : [];
-      } catch {
-        return [];
-      }
-    }
-    return [];
-  };
-
-  // 1. טעינת נתונים ראשונית
+  // 1. טעינת השאלון ויצירת המשחק
   useEffect(() => {
-    if (!quizId) return;
-
-    const initHost = async () => {
+    async function initGame() {
       try {
-        const {
-          data: { user },
-        } = await supabase.auth.getUser();
+        setLoading(true);
 
-        if (!user) {
-          router.push('/login');
+        // שליפת ה-Quiz
+        const { data: quizData, error: quizError } = await supabase
+          .from("quizzes")
+          .select("*")
+          .eq("id", quizId)
+          .single();
+
+        if (quizError || !quizData) {
+          alert("שאלון לא נמצא");
+          router.push("/");
           return;
         }
 
-        const { data: quizData } = await supabase
-          .from('quizzes')
-          .select('title')
-          .eq('id', quizId)
-          .single();
+        setQuiz(quizData);
 
-        const { data: qData } = await supabase
-          .from('questions')
-          .select('*')
-          .eq('quiz_id', quizId)
-          .order('created_at', { ascending: true });
+        // יצירת קוד PIN אקראי בן 6 ספרות
+        const generatedPin = Math.floor(100000 + Math.random() * 900000).toString();
+        setGamePin(generatedPin);
 
-        if (quizData) setQuizTitle(quizData.title);
-        if (qData && qData.length > 0) setQuestions(qData);
+        // שמירת המשחק בטבלת games
+        const { error: gameError } = await supabase.from("games").insert({
+          pin: generatedPin,
+          quiz_id: quizId,
+          status: "lobby",
+          current_question_index: 0,
+        });
+
+        if (gameError) {
+          console.error("Error creating game:", gameError);
+        }
       } catch (err) {
-        console.error('שגיאה בטעינת נתונים:', err);
+        console.error("Unexpected error:", err);
       } finally {
         setLoading(false);
       }
-    };
+    }
 
-    initHost();
+    initGame();
   }, [quizId, router]);
 
-  // 2. טעינת שחקנים מ-game_players (תומך גם בשחקנים שמצטרפים באמצע)
-  const fetchDbPlayers = useCallback(async () => {
-    const { data, error } = await supabase
-      .from('game_players')
-      .select('*')
-      .eq('game_pin', String(pinCode));
-
-    if (error) {
-      console.error('שגיאה בטעינת שחקנים:', error);
-      return;
-    }
-
-    if (data) {
-      setPlayers((prev) => {
-        return data.map((dbP) => {
-          const playerPhone = String(dbP.phone || dbP.id || '');
-          const existing = prev.find(
-            (p) => p.phone === playerPhone || p.id === dbP.id
-          );
-          return {
-            id: dbP.id || playerPhone,
-            phone: playerPhone,
-            name: dbP.player_name || `שחקן ${playerPhone.slice(-4)}`,
-            score: existing ? existing.score : 0,
-            lastAnswerIndex: existing ? existing.lastAnswerIndex : undefined,
-          };
-        });
-      });
-    }
-  }, [pinCode]);
-
-  // 3. חישוב ניקוד אחיד
-  const handleAnswerSubmitted = useCallback(
-    (identifier: string, answerIndex: number, timeTaken: number) => {
-      const currentQ = questions[currentQuestionIndex];
-      if (!currentQ || identifier === undefined || identifier === null) return;
-
-      const cleanId = String(identifier).replace(/\D/g, '');
-
-      setPlayers((prevPlayers) => {
-        let isNewAnswer = false;
-
-        const updated = prevPlayers.map((p) => {
-          const cleanPlayerPhone = p.phone.replace(/\D/g, '');
-
-          const match =
-            p.id === identifier ||
-            p.phone === identifier ||
-            (cleanId.length > 3 &&
-              cleanPlayerPhone.length > 3 &&
-              (cleanId.endsWith(cleanPlayerPhone) ||
-                cleanPlayerPhone.endsWith(cleanId)));
-
-          if (match) {
-            if (p.lastAnswerIndex !== undefined) return p;
-
-            isNewAnswer = true;
-            const isCorrect = answerIndex === currentQ.correct_option;
-            const bonus = isCorrect
-              ? Math.max(
-                  200,
-                  Math.round(
-                    1000 * (1 - timeTaken / (currentQ.time_limit || 20))
-                  )
-                )
-              : 0;
-
-            return {
-              ...p,
-              score: p.score + bonus,
-              lastAnswerIndex: answerIndex,
-            };
-          }
-          return p;
-        });
-
-        if (isNewAnswer) {
-          setAnswersCount((prev) => prev + 1);
-        }
-
-        return updated;
-      });
-    },
-    [questions, currentQuestionIndex]
-  );
-
-  // 4. סריקה אקטיבית של תשובות ב-DB עם חישוב זמן דינמי
-  const checkPhoneAnswers = useCallback(async () => {
-    if (gameState !== 'QUESTION') return;
-
-    const { data } = await supabase
-      .from('game_answers')
-      .select('*')
-      .eq('game_pin', String(pinCode))
-      .eq('question_index', currentQuestionIndex);
-
-    if (data && data.length > 0) {
-      data.forEach((ans) => {
-        if (ans.phone !== undefined) {
-          // חישוב זמן הגשת התשובה לפי זמן תחילת השאלה
-          const answerTime = ans.created_at
-            ? (new Date(ans.created_at).getTime() - questionStartTimeRef.current) / 1000
-            : (Date.now() - questionStartTimeRef.current) / 1000;
-
-          const timeTaken = Math.max(0, answerTime);
-          handleAnswerSubmitted(String(ans.phone), ans.answer_index, timeTaken);
-        }
-      });
-    }
-  }, [gameState, pinCode, currentQuestionIndex, handleAnswerSubmitted]);
-
-  // 5. סנכרון תקופתי וחיבור Realtime
+  // 2. האזנה בזמן אמת לחיבור שחקנים ותשובות (Realtime Subscriptions)
   useEffect(() => {
-    if (loading) return;
+    if (!gamePin) return;
 
-    fetchDbPlayers();
+    // שליפת שחקנים קיימים
+    const fetchPlayers = async () => {
+      const { data } = await supabase
+        .from("game_players")
+        .select("*")
+        .eq("game_pin", gamePin);
+      if (data) setPlayers(data);
+    };
 
-    // סריקת שחקנים ותשובות באופן שוטף
-    const interval = setInterval(() => {
-      fetchDbPlayers(); // מאפשר הצטרפות שחקנים גם תוך כדי משחק
-      if (gameState === 'QUESTION') {
-        checkPhoneAnswers();
-      }
-    }, 1000);
+    // שליפת תשובות קיימות
+    const fetchAnswers = async () => {
+      const { data } = await supabase
+        .from("game_answers")
+        .select("*")
+        .eq("game_pin", gamePin);
+      if (data) setAnswers(data);
+    };
 
-    const channel = supabase.channel(`game_${pinCode}`);
+    fetchPlayers();
+    fetchAnswers();
 
-    channel.on('broadcast', { event: 'SUBMIT_ANSWER' }, ({ payload }) => {
-      if (payload) {
-        handleAnswerSubmitted(
-          String(payload.playerId),
-          payload.answerIndex,
-          payload.timeTaken || 0
-        );
-      }
-    });
+    // מאזין לטבלת game_players
+    const playerChannel = supabase
+      .channel(`host_players_${gamePin}`)
+      .on(
+        "postgres_changes",
+        {
+          event: "*",
+          schema: "public",
+          table: "game_players",
+          filter: `game_pin=eq.${gamePin}`,
+        },
+        () => fetchPlayers()
+      )
+      .subscribe();
 
-    channel.subscribe();
-    channelRef.current = channel;
+    // מאזין לטבלת game_answers
+    const answerChannel = supabase
+      .channel(`host_answers_${gamePin}`)
+      .on(
+        "postgres_changes",
+        {
+          event: "*",
+          schema: "public",
+          table: "game_answers",
+          filter: `game_pin=eq.${gamePin}`,
+        },
+        () => fetchAnswers()
+      )
+      .subscribe();
 
     return () => {
-      clearInterval(interval);
-      supabase.removeChannel(channel);
+      supabase.removeChannel(playerChannel);
+      supabase.removeChannel(answerChannel);
     };
-  }, [
-    pinCode,
-    loading,
-    gameState,
-    fetchDbPlayers,
-    checkPhoneAnswers,
-    handleAnswerSubmitted,
-  ]);
+  }, [gamePin]);
 
-  const endQuestion = useCallback(() => {
-    if (timerRef.current) clearInterval(timerRef.current);
-    setGameState('SHOW_RESULT');
-
-    const currentQ = questions[currentQuestionIndex];
-    if (!currentQ) return;
-
-    channelRef.current?.send({
-      type: 'broadcast',
-      event: 'QUESTION_END',
-      payload: { correctOption: currentQ.correct_option },
-    });
-  }, [questions, currentQuestionIndex]);
-
-  // מנגנון הטיימר
+  // 3. ניהול טיימר לשאלה הפעילה
   useEffect(() => {
-    if (gameState === 'QUESTION' && timeLeft > 0) {
-      timerRef.current = setInterval(() => {
+    let timer: NodeJS.Timeout;
+
+    if (status === "active" && timeLeft > 0) {
+      timer = setInterval(() => {
         setTimeLeft((prev) => prev - 1);
       }, 1000);
-    } else if (timeLeft === 0 && gameState === 'QUESTION') {
-      endQuestion();
+    } else if (status === "active" && timeLeft === 0) {
+      handleTimeUp();
     }
 
-    return () => {
-      if (timerRef.current) clearInterval(timerRef.current);
-    };
-  }, [gameState, timeLeft, endQuestion]);
+    return () => clearInterval(timer);
+  }, [status, timeLeft]);
 
-  const startGame = () => {
-    if (questions.length === 0) {
-      alert('לא נמצאו שאלות בשאלון זה!');
-      return;
-    }
-    if (players.length === 0) {
-      alert('יש להמתין לפחות לשחקן אחד!');
-      return;
-    }
-    startQuestion(0);
+  // תום הזמן לשאלה
+  const handleTimeUp = async () => {
+    setStatus("showing_results");
+    if (!gamePin) return;
+
+    await supabase
+      .from("games")
+      .update({ status: "showing_results" })
+      .eq("pin", gamePin);
   };
 
-  const startQuestion = (index: number) => {
-    const q = questions[index];
-    if (!q) return;
+  // התחלת המשחק / מעבר לשאלה הבאה
+  const handleStartOrNext = async () => {
+    if (!quiz || !gamePin) return;
 
-    setCurrentQuestionIndex(index);
-    setAnswersCount(0);
-    setTimeLeft(q.time_limit || 20);
-    questionStartTimeRef.current = Date.now();
-    setGameState('QUESTION');
-
-    setPlayers((prev) =>
-      prev.map((p) => ({ ...p, lastAnswerIndex: undefined }))
-    );
-
-    const parsedOptions = getParsedOptions(q.options);
-
-    channelRef.current?.send({
-      type: 'broadcast',
-      event: 'QUESTION_START',
-      payload: {
-        questionIndex: index,
-        questionText: q.question_text,
-        options: parsedOptions,
-        timeLimit: q.time_limit || 20,
-      },
-    });
-  };
-
-  const showLeaderboard = () => setGameState('LEADERBOARD');
-
-  const finishGameCleanup = async () => {
-    setGameState('GAME_OVER');
-    const pinStr = String(pinCode);
-
-    try {
-      const { data: dbPlayers } = await supabase
-        .from('game_players')
-        .select('phone')
-        .eq('game_pin', pinStr);
-
-      const phones =
-        dbPlayers?.map((p) => String(p.phone)).filter(Boolean) || [];
+    if (status === "lobby") {
+      // התחלת שאלה ראשונה
+      setCurrentQIndex(0);
+      setTimeLeft(30);
+      setStatus("active");
 
       await supabase
-        .from('ivr_sessions')
-        .update({ status: 'FINISHED' })
-        .eq('pin', pinStr);
+        .from("games")
+        .update({
+          status: "active",
+          current_question_index: 0,
+          question_start_time: new Date().toISOString(),
+        })
+        .eq("pin", gamePin);
+    } else if (status === "showing_results") {
+      const nextIndex = currentQIndex + 1;
 
-      if (phones.length > 0) {
+      if (nextIndex < quiz.questions.length) {
+        // מעבר לשאלה הבאה
+        setCurrentQIndex(nextIndex);
+        setTimeLeft(30);
+        setStatus("active");
+
         await supabase
-          .from('ivr_sessions')
-          .update({ status: 'FINISHED' })
-          .in('phone', phones);
+          .from("games")
+          .update({
+            status: "active",
+            current_question_index: nextIndex,
+            question_start_time: new Date().toISOString(),
+          })
+          .eq("pin", gamePin);
+      } else {
+        // סיום המשחק
+        setStatus("finished");
+
+        await supabase
+          .from("games")
+          .update({ status: "finished" })
+          .eq("pin", gamePin);
+
+        // הפיכת ה-IVR Sessions ל-FINISHED
+        await supabase
+          .from("ivr_sessions")
+          .update({ status: "FINISHED" })
+          .eq("pin", gamePin);
       }
-
-      channelRef.current?.send({
-        type: 'broadcast',
-        event: 'GAME_OVER',
-        payload: {},
-      });
-
-      await new Promise((res) => setTimeout(res, 1500));
-
-      await supabase.from('game_answers').delete().eq('game_pin', pinStr);
-      await supabase.from('game_players').delete().eq('game_pin', pinStr);
-      await supabase.from('ivr_sessions').delete().eq('pin', pinStr);
-
-      if (phones.length > 0) {
-        await supabase.from('game_players').delete().in('phone', phones);
-        await supabase.from('ivr_sessions').delete().in('phone', phones);
-      }
-
-      console.log('סיום משחק וניקוי נתונים הושלם בהצלחה.');
-    } catch (err) {
-      console.error('שגיאה בתהליך סיום המשחק והניקוי:', err);
-    }
-  };
-
-  const nextQuestion = () => {
-    if (currentQuestionIndex + 1 < questions.length) {
-      startQuestion(currentQuestionIndex + 1);
-    } else {
-      finishGameCleanup();
     }
   };
 
   if (loading) {
     return (
-      <main className="min-h-screen bg-[#0d041e] text-white flex justify-center items-center dir-rtl">
-        <p className="text-white/60 animate-pulse">מכין את קוד המשחק...</p>
-      </main>
+      <div className="flex h-screen items-center justify-center bg-slate-900 text-white font-sans dir-rtl">
+        <h2 className="text-2xl animate-pulse">טוען את המשחק...</h2>
+      </div>
     );
   }
 
-  const currentQ = questions[currentQuestionIndex];
-  const currentOptions = currentQ ? getParsedOptions(currentQ.options) : [];
-  const sortedPlayers = [...players].sort((a, b) => b.score - a.score);
+  const currentQuestion = quiz?.questions[currentQIndex];
+
+  // חישוב התשובות לשאלה הנוכחית
+  const currentAnswers = answers.filter((a) => a.question_index === currentQIndex);
+
+  // חישוב לוח מובילים (Leaderboard)
+  const calculateLeaderboard = () => {
+    return players
+      .map((player) => {
+        let totalScore = 0;
+        answers.forEach((ans) => {
+          if (ans.phone === player.phone) {
+            const q = quiz?.questions[ans.question_index];
+            if (q && ans.answer_index === q.correct_answer_index) {
+              totalScore += ans.score_awarded || 1000;
+            }
+          }
+        });
+        return { ...player, totalScore };
+      })
+      .sort((a, b) => b.totalScore - a.totalScore);
+  };
 
   return (
-    <main className="min-h-screen bg-[#0d041e] text-white dir-rtl flex flex-col justify-between p-6 md:p-10 select-none">
-      <header className="flex items-center justify-between border-b border-white/10 pb-4">
+    <div className="min-h-screen bg-slate-900 text-white p-6 dir-rtl flex flex-col justify-between font-sans">
+      {/* כותרת עליונה */}
+      <header className="flex justify-between items-center border-b border-slate-700 pb-4">
         <div>
-          <h1 className="text-2xl font-black text-fuchsia-300">
-            {quizTitle || 'שאלון ללא שם'}
-          </h1>
-          <p className="text-xs text-white/50">מנחה המשחק</p>
+          <h1 className="text-2xl font-bold">{quiz?.title}</h1>
+          <p className="text-slate-400 text-sm">
+            {status === "lobby"
+              ? "ממתין לשחקנים"
+              : status === "finished"
+              ? "המשחק הסתיים"
+              : `שאלה ${currentQIndex + 1} מתוך ${quiz?.questions.length}`}
+          </p>
         </div>
 
-        <div className="flex items-center gap-4">
-          <div className="bg-white/10 px-6 py-2 rounded-2xl border border-white/20 text-center">
-            <span className="text-xs text-white/60 block">קוד PIN:</span>
-            <span className="text-3xl font-black tracking-widest text-fuchsia-400">
-              {pinCode}
-            </span>
-          </div>
-          <Link
-            href="/dashboard"
-            className="text-xs text-white/40 hover:text-white"
-          >
-            יציאה
-          </Link>
+        {/* PIN קוד המשחק */}
+        <div className="bg-indigo-600 px-6 py-2 rounded-xl font-mono text-center">
+          <span className="text-xs text-indigo-200 block uppercase">קוד התחברות בטלפון</span>
+          <span className="text-3xl font-black tracking-wider">{gamePin}</span>
         </div>
       </header>
 
-      {/* LOBBY */}
-      {gameState === 'LOBBY' && (
-        <div className="max-w-4xl mx-auto w-full text-center py-12">
-          <h2 className="text-3xl md:text-5xl font-black mb-3">
-            היכנסו ל-MegaClick או התקשרו במערכת הקולית
-          </h2>
-          <p className="text-white/60 text-lg mb-8">
-            הזינו את הקוד <strong className="text-fuchsia-400">{pinCode}</strong>
-          </p>
+      {/* 1. מסך ממתין (Lobby) */}
+      {status === "lobby" && (
+        <main className="flex-1 flex flex-col items-center justify-center my-8 text-center">
+          <h2 className="text-4xl font-extrabold mb-4">חייגו והקישו את הקוד כדי להצטרף</h2>
+          <p className="text-slate-300 text-lg mb-8">מספר שחקנים שהתחברו: <span className="font-bold text-yellow-400">{players.length}</span></p>
 
-          <div className="glass rounded-3xl p-8 border border-white/10 min-h-[250px] mb-8 flex flex-wrap gap-4 items-center justify-center">
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-4 w-full max-w-4xl max-h-64 overflow-y-auto p-4 bg-slate-800 rounded-2xl">
             {players.length === 0 ? (
-              <p className="text-white/40 animate-pulse text-lg">
-                מחכה לשחקנים...
-              </p>
+              <p className="col-span-full text-slate-500 py-8">טרם התחברו שחקנים...</p>
             ) : (
-              players.map((p) => (
-                <div
-                  key={p.id}
-                  className="bg-gradient-to-r from-fuchsia-500/20 to-violet-500/20 border border-fuchsia-500/40 px-6 py-3 rounded-2xl font-bold text-lg"
-                >
-                  👤 {p.name}
+              players.map((p, idx) => (
+                <div key={idx} className="bg-slate-700 p-3 rounded-xl font-medium border border-slate-600">
+                  📞 {p.player_name}
                 </div>
               ))
             )}
           </div>
-
-          <div className="flex justify-between items-center px-4">
-            <span className="text-xl font-bold text-fuchsia-300">
-              {players.length} שחקנים מחוברים
-            </span>
-            <button
-              onClick={startGame}
-              className="px-10 py-4 rounded-2xl font-black text-xl bg-gradient-to-r from-fuchsia-500 to-violet-600 hover:from-fuchsia-400 hover:to-violet-500 shadow-xl transition-all cursor-pointer"
-            >
-              התחל משחק 🚀
-            </button>
-          </div>
-        </div>
+        </main>
       )}
 
-      {/* QUESTION */}
-      {gameState === 'QUESTION' && currentQ && (
-        <div className="max-w-5xl mx-auto w-full py-6">
+      {/* 2. מסך שאלה פעילה (Active Question) */}
+      {status === "active" && currentQuestion && (
+        <main className="flex-1 flex flex-col justify-center max-w-4xl mx-auto w-full my-6">
           <div className="flex justify-between items-center mb-6">
-            <span className="text-sm font-bold text-fuchsia-300">
-              שאלה {currentQuestionIndex + 1} מתוך {questions.length}
+            <span className="text-xl bg-slate-800 px-4 py-2 rounded-lg border border-slate-700">
+              תשובות שנתקבלו: <strong className="text-emerald-400">{currentAnswers.length}</strong> / {players.length}
             </span>
-            <div className="flex items-center gap-6">
-              <div className="text-center">
-                <span className="text-xs text-white/50 block">תשובות</span>
-                <span className="text-2xl font-black">
-                  {answersCount} / {players.length}
-                </span>
-              </div>
-              <div className="w-16 h-16 rounded-full bg-fuchsia-500/20 border-2 border-fuchsia-500 flex items-center justify-center text-2xl font-black animate-pulse">
-                {timeLeft}
-              </div>
-            </div>
+            <span className={`text-3xl font-mono font-bold px-4 py-2 rounded-full ${timeLeft <= 5 ? "bg-red-600 animate-ping" : "bg-indigo-600"}`}>
+              ⏱️ {timeLeft}
+            </span>
           </div>
 
-          <h2 className="text-3xl md:text-5xl font-black text-center my-10 leading-snug">
-            {currentQ.question_text}
-          </h2>
+          <div className="bg-slate-800 p-8 rounded-2xl shadow-xl mb-8 border border-slate-700">
+            <h2 className="text-3xl font-bold leading-snug">{currentQuestion.question_text}</h2>
+          </div>
 
-          <div className="grid grid-cols-2 gap-4">
-            {currentOptions.map((opt, i) => (
-              <div
-                key={i}
-                className="glass p-6 rounded-2xl font-bold text-xl border border-white/10 flex items-center gap-4"
-              >
-                <span className="w-10 h-10 rounded-xl bg-white/10 flex items-center justify-center text-sm">
-                  {i + 1}
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            {currentQuestion.options.map((opt, idx) => (
+              <div key={idx} className="bg-slate-800 p-5 rounded-xl border border-slate-700 flex items-center text-lg">
+                <span className="w-8 h-8 rounded-full bg-indigo-500 flex items-center justify-center font-bold ml-3">
+                  {idx + 1}
                 </span>
                 {opt}
               </div>
             ))}
           </div>
-        </div>
+        </main>
       )}
 
-      {/* SHOW RESULT */}
-      {gameState === 'SHOW_RESULT' && currentQ && (
-        <div className="max-w-4xl mx-auto w-full text-center py-10">
-          <h2 className="text-4xl font-black mb-8">התשובה הנכונה היא:</h2>
-          <div className="glass p-8 rounded-3xl border-2 border-emerald-500 bg-emerald-500/10 text-3xl font-black text-emerald-300 mb-10">
-            {currentOptions[currentQ.correct_option] || 'תשובה לא מוגדרת'}
+      {/* 3. מסך תוצאות שאלה (Showing Results) */}
+      {status === "showing_results" && currentQuestion && (
+        <main className="flex-1 flex flex-col justify-center max-w-4xl mx-auto w-full my-6">
+          <h2 className="text-2xl font-bold mb-4 text-center text-emerald-400">התשובה הנכונה היא: option {currentQuestion.correct_answer_index + 1}</h2>
+
+          <div className="bg-slate-800 p-6 rounded-2xl mb-6 border border-slate-700">
+            <h3 className="text-lg font-bold mb-3 text-slate-300">תשובה נכונה: {currentQuestion.options[currentQuestion.correct_answer_index]}</h3>
+            <p className="text-slate-400">ענו כהלכה בשאלה זו: {currentAnswers.filter(a => a.answer_index === currentQuestion.correct_answer_index).length} שחקנים</p>
           </div>
-          <button
-            onClick={showLeaderboard}
-            className="px-10 py-4 rounded-2xl font-black text-xl bg-gradient-to-r from-fuchsia-500 to-violet-600 hover:from-fuchsia-400 hover:to-violet-500 shadow-xl transition-all cursor-pointer"
-          >
-            הצג טבלת מובילים 🏆
-          </button>
-        </div>
-      )}
 
-      {/* LEADERBOARD */}
-      {gameState === 'LEADERBOARD' && (
-        <div className="max-w-3xl mx-auto w-full py-6">
-          <h2 className="text-4xl font-black text-center mb-8">
-            טבלת מובילים 🏆
-          </h2>
-          <div className="space-y-3 mb-10">
-            {sortedPlayers.slice(0, 5).map((p, rank) => (
-              <div
-                key={p.id}
-                className="glass p-4 rounded-2xl border border-white/10 flex items-center justify-between font-bold text-lg"
-              >
-                <div className="flex items-center gap-4">
-                  <span className="w-8 h-8 rounded-full flex items-center justify-center text-sm bg-white/10">
-                    {rank + 1}
-                  </span>
-                  <span>{p.name}</span>
+          <div className="bg-slate-800 p-6 rounded-2xl border border-slate-700">
+            <h3 className="text-xl font-bold mb-4 border-b border-slate-700 pb-2">🏆 מובילים נוכחיים:</h3>
+            <div className="space-y-2">
+              {calculateLeaderboard().slice(0, 5).map((p, idx) => (
+                <div key={idx} className="flex justify-between items-center bg-slate-700 p-3 rounded-lg">
+                  <span>{idx + 1}. {p.player_name}</span>
+                  <span className="font-bold text-yellow-400">{p.totalScore} נק'</span>
                 </div>
-                <span className="text-fuchsia-300">{p.score} נק׳</span>
-              </div>
-            ))}
+              ))}
+            </div>
           </div>
-          <div className="text-center">
-            <button
-              onClick={nextQuestion}
-              className="px-10 py-4 rounded-2xl font-black text-xl bg-gradient-to-r from-fuchsia-500 to-violet-600 hover:from-fuchsia-400 hover:to-violet-500 shadow-xl transition-all cursor-pointer"
-            >
-              {currentQuestionIndex + 1 < questions.length
-                ? 'לשאלה הבאה ➔'
-                : 'לסיום המשחק 🎉'}
-            </button>
-          </div>
-        </div>
+        </main>
       )}
 
-      {/* GAME OVER */}
-      {gameState === 'GAME_OVER' && (
-        <div className="max-w-3xl mx-auto w-full text-center py-12">
-          <h2 className="text-5xl font-black mb-4">המנצחים הגדולים! 🎉</h2>
-          {sortedPlayers.length > 0 && (
-            <div className="glass p-8 rounded-3xl border border-fuchsia-500/50 my-8">
-              <div className="text-6xl mb-2">🥇</div>
-              <h3 className="text-3xl font-black text-fuchsia-300">
-                {sortedPlayers[0]?.name}
-              </h3>
-              <p className="text-2xl font-bold mt-2">
-                {sortedPlayers[0]?.score} נקודות
-              </p>
+      {/* 4. מסך סיום המשחק (Finished) */}
+      {status === "finished" && (
+        <main className="flex-1 flex flex-col items-center justify-center my-8 text-center max-w-2xl mx-auto w-full">
+          <h2 className="text-5xl font-extrabold text-yellow-400 mb-6">🏆 המשחק הסתיים!</h2>
+          <div className="bg-slate-800 p-6 rounded-2xl w-full border border-slate-700">
+            <h3 className="text-2xl font-bold mb-4">טבלת המנצחים הסופית:</h3>
+            <div className="space-y-3">
+              {calculateLeaderboard().map((p, idx) => (
+                <div key={idx} className={`flex justify-between items-center p-4 rounded-xl ${idx === 0 ? "bg-amber-500 text-slate-900 font-bold text-xl" : "bg-slate-700"}`}>
+                  <span>{idx + 1}. {p.player_name}</span>
+                  <span>{p.totalScore} נקודות</span>
+                </div>
+              ))}
             </div>
-          )}
-          <Link
-            href="/dashboard"
-            className="inline-block px-10 py-4 rounded-2xl font-black text-xl bg-white/10 hover:bg-white/20 border border-white/20 transition-colors"
-          >
-            חזרה לדשבורד
-          </Link>
-        </div>
+          </div>
+        </main>
       )}
-    </main>
+
+      {/* סרגל כפתורי תפעול חברתי/ניהול */}
+      <footer className="pt-4 border-t border-slate-800 flex justify-end">
+        {status === "lobby" && (
+          <button
+            onClick={handleStartOrNext}
+            disabled={players.length === 0}
+            className="bg-emerald-500 hover:bg-emerald-600 disabled:opacity-50 text-slate-950 font-black text-xl px-8 py-3 rounded-xl transition"
+          >
+            התחל משחק 🚀
+          </button>
+        )}
+
+        {status === "active" && (
+          <button
+            onClick={handleTimeUp}
+            className="bg-amber-500 hover:bg-amber-600 text-slate-950 font-bold px-6 py-3 rounded-xl transition"
+          >
+            עצור שאלה והצג תוצאות ⏹️
+          </button>
+        )}
+
+        {status === "showing_results" && (
+          <button
+            onClick={handleStartOrNext}
+            className="bg-indigo-500 hover:bg-indigo-600 text-white font-bold text-xl px-8 py-3 rounded-xl transition"
+          >
+            {currentQIndex + 1 < (quiz?.questions.length || 0) ? "לשאלה הבאה ➡️" : "לתוצאות הסופיות 🏆"}
+          </button>
+        )}
+
+        {status === "finished" && (
+          <button
+            onClick={() => router.push("/")}
+            className="bg-slate-700 hover:bg-slate-600 text-white font-bold px-6 py-3 rounded-xl transition"
+          >
+            חזרה לדף הבית
+          </button>
+        )}
+      </footer>
+    </div>
   );
 }
