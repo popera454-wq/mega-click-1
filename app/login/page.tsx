@@ -3,7 +3,12 @@
 import React, { useState } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
-import { createClientComponentClient } from '@supabase/auth-helpers-nextjs';
+import { createClient } from '@supabase/supabase-js';
+
+// Initialize Supabase Client directly for browser usage
+const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || '';
+const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || '';
+const supabase = createClient(supabaseUrl, supabaseAnonKey);
 
 export default function LoginPage() {
   const [isSignUp, setIsSignUp] = useState(false);
@@ -15,7 +20,6 @@ export default function LoginPage() {
   const [loading, setLoading] = useState(false);
 
   const router = useRouter();
-  const supabase = createClientComponentClient();
 
   // Handle Email/Password Login or Sign Up
   const handleAuth = async (e: React.FormEvent) => {
@@ -58,7 +62,7 @@ export default function LoginPage() {
       if (error) {
         setErrorMsg(error.message);
       } else {
-        router.push('/dashboard'); // או עמוד הניהול שלך
+        router.push('/dashboard');
         router.refresh();
       }
     }
@@ -139,7 +143,7 @@ export default function LoginPage() {
               </div>
             )}
 
-            {/* Google Login Button (Shown unless in forgot password mode) */}
+            {/* Google Login Button */}
             {!isForgotPassword && (
               <>
                 <button
