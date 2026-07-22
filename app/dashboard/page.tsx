@@ -32,20 +32,17 @@ export default function DashboardPage() {
     const fetchUserDataAndQuizzes = async () => {
       setLoading(true);
 
-      // בדיקת משתמש מחובר
       const {
         data: { user: currentUser },
       } = await supabase.auth.getUser();
 
       if (!currentUser) {
-        // אם המשתמש לא מחובר - מעבירים אותו לדף התחברות
         router.push('/login');
         return;
       }
 
       setUser(currentUser);
 
-      // טעינת החידונים האישיים של המשתמש בלבד
       const { data, error } = await supabase
         .from('quizzes')
         .select('*')
@@ -64,7 +61,7 @@ export default function DashboardPage() {
     fetchUserDataAndQuizzes();
   }, [router]);
 
-  // 2. יצירת חידון חדש
+  // 2. יצירת חידון חדש ומעבר לעמוד עריכת שאלות
   const handleCreateQuiz = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!newTitle.trim()) return;
@@ -87,26 +84,18 @@ export default function DashboardPage() {
 
       if (error) throw error;
 
-      // עדכון הליסט המקומי
-      setQuizzes([data, ...quizzes]);
-
-      // איפוס וסגירת המודל
-      setNewTitle('');
-      setNewDescription('');
-      setIsModalOpen(false);
-
-      // מעבר לעמוד עריכת השאלות של החידון החדש (נבנה בהמשך)
-      // router.push(`/dashboard/quiz/${data.id}`);
+      // מעבר ישיר לעמוד עריכת השאלות של החידון החדש
+      router.push(`/dashboard/quiz/${data.id}`);
     } catch (err: any) {
       setErrorMsg(err.message || 'אירעה שגיאה ביצירת החידון');
-    } finally {
       setCreating(false);
     }
   };
 
   // 3. מחיקת חידון
-  const handleDeleteQuiz = async (quizId: string) => {
-    if (!confirm('האם אתה בטוח שברצונך למחוק חידון זה?')) return;
+  const handleDeleteQuiz = async (quizId: string, e: React.MouseEvent) => {
+    e.preventDefault();
+    if (!confirm('האם אתה בטוח שברצונך למחוק חידון זה? כל השאלות ימחקו לצמיתות.')) return;
 
     const { error } = await supabase.from('quizzes').delete().eq('id', quizId);
 
@@ -127,9 +116,9 @@ export default function DashboardPage() {
     return (
       <main className="min-h-screen grid-bg bg-[#0d041e] text-white flex justify-center items-center dir-rtl">
         <div className="flex flex-col items-center gap-4">
-          <div className="w-10 h-10 border-4 border-fuchsia-500/30 border-t-fuchsia-500 rounded-full animate-spin" />
-          <p className="text-white/60 font-light text-sm">
-            טעון את החידונים שלך...
+          <div className="w-12 h-12 border-4 border-fuchsia-500/30 border-t-fuchsia-500 rounded-full animate-spin shadow-lg shadow-fuchsia-500/20" />
+          <p className="text-white/60 font-medium text-sm tracking-wide">
+            טוען את המרחב שלך...
           </p>
         </div>
       </main>
@@ -137,13 +126,13 @@ export default function DashboardPage() {
   }
 
   return (
-    <main className="min-h-screen grid-bg bg-[#0d041e] text-white dir-rtl pb-20">
+    <main className="min-h-screen grid-bg bg-[#0d041e] text-white dir-rtl pb-24 selection:bg-fuchsia-500 selection:text-white">
       {/* Header / Navbar */}
-      <header className="sticky top-0 z-20 flex items-center justify-between border-b border-white/10 bg-[#130728bb] px-6 py-4 backdrop-blur-xl md:px-12">
-        <Link href="/" className="flex items-center gap-2">
-          <div className="grid h-10 w-10 place-items-center rounded-xl bg-gradient-to-tr from-fuchsia-500 to-violet-500 text-white shadow-md shadow-fuchsia-500/30">
+      <header className="sticky top-0 z-30 flex items-center justify-between border-b border-white/10 bg-[#130728]/80 px-6 py-4 backdrop-blur-2xl md:px-12 shadow-2xl">
+        <Link href="/" className="flex items-center gap-3 group">
+          <div className="grid h-11 w-11 place-items-center rounded-2xl bg-gradient-to-tr from-fuchsia-600 to-violet-500 text-white shadow-lg shadow-fuchsia-500/40 group-hover:scale-105 transition-transform">
             <svg
-              className="w-5 h-5 animate-pulse"
+              className="w-6 h-6 animate-pulse"
               fill="none"
               stroke="currentColor"
               viewBox="0 0 24 24"
@@ -156,21 +145,21 @@ export default function DashboardPage() {
               />
             </svg>
           </div>
-          <span className="text-2xl font-black bg-gradient-to-r from-fuchsia-300 via-pink-200 to-white bg-clip-text text-transparent">
+          <span className="text-2xl font-black tracking-tight bg-gradient-to-r from-fuchsia-300 via-pink-200 to-white bg-clip-text text-transparent">
             MegaClick
           </span>
         </Link>
 
         <div className="flex items-center gap-4">
-          <div className="hidden sm:block text-left text-xs">
-            <p className="text-white/50">מחובר כ-</p>
-            <p className="font-bold text-fuchsia-200 truncate max-w-[150px]">
+          <div className="hidden sm:block text-left text-xs bg-white/5 border border-white/10 px-4 py-2 rounded-2xl">
+            <p className="text-white/40 font-medium">מחובר כ-</p>
+            <p className="font-bold text-fuchsia-200 truncate max-w-[180px]">
               {user?.email}
             </p>
           </div>
           <button
             onClick={handleLogout}
-            className="px-4 py-2 text-sm font-bold rounded-xl bg-white/10 hover:bg-white/20 border border-white/10 transition-all active:scale-95 text-white/80 hover:text-white"
+            className="px-4 py-2.5 text-sm font-bold rounded-2xl bg-white/10 hover:bg-red-500/20 hover:border-red-500/40 border border-white/10 transition-all active:scale-95 text-white/80 hover:text-red-200"
           >
             יציאה
           </button>
@@ -178,24 +167,24 @@ export default function DashboardPage() {
       </header>
 
       {/* Main Container */}
-      <div className="max-w-6xl mx-auto px-6 pt-10">
+      <div className="max-w-7xl mx-auto px-6 pt-12">
         {/* Title Bar & Actions */}
-        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 mb-10">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-6 mb-12 bg-gradient-to-l from-fuchsia-950/20 via-transparent to-transparent p-8 rounded-3xl border border-white/5 shadow-inner">
           <div>
-            <h1 className="text-3xl md:text-4xl font-black bg-gradient-to-r from-white via-fuchsia-100 to-fuchsia-300 bg-clip-text text-transparent">
+            <h1 className="text-3xl md:text-5xl font-black tracking-tight bg-gradient-to-r from-white via-fuchsia-100 to-fuchsia-300 bg-clip-text text-transparent mb-2">
               החידונים שלי 🎮
             </h1>
-            <p className="text-white/60 text-sm mt-1">
-              נהל את החידונים שייצרת או צור חידון חדש בלחיצה.
+            <p className="text-white/60 text-base font-light">
+              נהל את החידונים שייצרת, ערוך שאלות או התחל משחק בלייב לקהל שלך.
             </p>
           </div>
 
           <button
             onClick={() => setIsModalOpen(true)}
-            className="inline-flex items-center justify-center gap-2 px-6 py-3.5 rounded-2xl font-bold bg-gradient-to-r from-fuchsia-500 to-violet-600 hover:from-fuchsia-400 hover:to-violet-500 text-white shadow-lg shadow-fuchsia-500/30 transition-all duration-200 active:scale-95 text-sm md:text-base"
+            className="inline-flex items-center justify-center gap-3 px-7 py-4 rounded-2xl font-bold bg-gradient-to-r from-fuchsia-500 to-violet-600 hover:from-fuchsia-400 hover:to-violet-500 text-white shadow-xl shadow-fuchsia-500/25 transition-all duration-300 hover:scale-[1.02] active:scale-95 text-base"
           >
             <svg
-              className="w-5 h-5"
+              className="w-6 h-6"
               fill="none"
               stroke="currentColor"
               viewBox="0 0 24 24"
@@ -213,10 +202,10 @@ export default function DashboardPage() {
 
         {/* Quizzes Grid / Empty State */}
         {quizzes.length === 0 ? (
-          <div className="glass neon rounded-3xl p-12 text-center max-w-xl mx-auto my-12 border border-white/10">
-            <div className="w-16 h-16 mx-auto mb-4 rounded-2xl bg-fuchsia-500/20 flex items-center justify-center text-fuchsia-300">
+          <div className="glass neon rounded-3xl p-16 text-center max-w-xl mx-auto my-12 border border-white/10 shadow-2xl">
+            <div className="w-20 h-20 mx-auto mb-6 rounded-3xl bg-gradient-to-tr from-fuchsia-500/20 to-violet-500/20 border border-fuchsia-500/30 flex items-center justify-center text-fuchsia-300 shadow-inner">
               <svg
-                className="w-8 h-8"
+                className="w-10 h-10 animate-bounce"
                 fill="none"
                 stroke="currentColor"
                 viewBox="0 0 24 24"
@@ -224,21 +213,20 @@ export default function DashboardPage() {
                 <path
                   strokeLinecap="round"
                   strokeLinejoin="round"
-                  strokeWidth={2}
+                  strokeWidth={1.8}
                   d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10"
                 />
               </svg>
             </div>
-            <h3 className="text-xl font-bold text-white mb-2">
-              עדיין אין לך חידונים
+            <h3 className="text-2xl font-bold text-white mb-3">
+              עדיין אין לך חידונים פעילים
             </h3>
-            <p className="text-white/60 text-sm mb-6">
-              זה הזמן ליצור את החידון הראשון שלך ולהרים את האווירה לחברים או
-              לקהל!
+            <p className="text-white/60 text-sm mb-8 leading-relaxed">
+              זה הזמן ליצור את החידון הראשון שלך, להוסיף שאלות מרתקות ולהרים את האווירה עם חברים או קהל!
             </p>
             <button
               onClick={() => setIsModalOpen(true)}
-              className="px-6 py-3 rounded-xl font-bold bg-fuchsia-500 hover:bg-fuchsia-400 text-white shadow-md transition-all text-sm"
+              className="px-8 py-3.5 rounded-2xl font-bold bg-fuchsia-500 hover:bg-fuchsia-400 text-white shadow-lg shadow-fuchsia-500/30 transition-all hover:scale-105 active:scale-95 text-sm"
             >
               צור את החידון הראשון
             </button>
@@ -248,17 +236,19 @@ export default function DashboardPage() {
             {quizzes.map((quiz) => (
               <div
                 key={quiz.id}
-                className="glass neon rounded-3xl p-6 border border-white/10 flex flex-col justify-between hover:border-fuchsia-400/40 transition-all duration-300 group"
+                className="glass neon rounded-3xl p-7 border border-white/10 flex flex-col justify-between hover:border-fuchsia-400/50 hover:shadow-2xl hover:shadow-fuchsia-500/10 transition-all duration-300 group relative overflow-hidden"
               >
+                <div className="absolute inset-0 bg-gradient-to-b from-fuchsia-500/5 to-transparent opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none" />
+
                 <div>
-                  <div className="flex items-start justify-between gap-2 mb-3">
+                  <div className="flex items-start justify-between gap-3 mb-3">
                     <h2 className="text-xl font-bold text-white group-hover:text-fuchsia-300 transition-colors line-clamp-1">
                       {quiz.title}
                     </h2>
                     <button
-                      onClick={() => handleDeleteQuiz(quiz.id)}
+                      onClick={(e) => handleDeleteQuiz(quiz.id, e)}
                       title="מחק חידון"
-                      className="text-white/30 hover:text-red-400 p-1 transition-colors"
+                      className="text-white/30 hover:text-red-400 p-2 rounded-xl hover:bg-red-500/10 transition-all"
                     >
                       <svg
                         className="w-5 h-5"
@@ -275,25 +265,25 @@ export default function DashboardPage() {
                       </svg>
                     </button>
                   </div>
-                  <p className="text-white/60 text-sm line-clamp-2 mb-6 font-light">
-                    {quiz.description || 'ללא תיאור'}
+                  <p className="text-white/60 text-sm line-clamp-2 mb-8 font-light leading-relaxed">
+                    {quiz.description || 'ללא תיאור מוגדר...'}
                   </p>
                 </div>
 
-                <div className="pt-4 border-t border-white/10 flex items-center justify-between gap-2">
-                  <span className="text-xs text-white/40">
+                <div className="pt-4 border-t border-white/10 flex items-center justify-between gap-2 relative z-10">
+                  <span className="text-xs font-medium text-white/40 bg-white/5 px-2.5 py-1 rounded-lg">
                     {new Date(quiz.created_at).toLocaleDateString('he-IL')}
                   </span>
                   <div className="flex items-center gap-2">
                     <Link
                       href={`/dashboard/quiz/${quiz.id}`}
-                      className="px-3.5 py-2 rounded-xl text-xs font-bold bg-white/10 hover:bg-white/20 text-white transition-all"
+                      className="px-3.5 py-2.5 rounded-xl text-xs font-bold bg-white/10 hover:bg-white/20 text-white transition-all active:scale-95"
                     >
                       עריכת שאלות
                     </Link>
                     <Link
                       href={`/host/${quiz.id}`}
-                      className="px-3.5 py-2 rounded-xl text-xs font-bold bg-gradient-to-r from-fuchsia-500 to-violet-600 hover:from-fuchsia-400 hover:to-violet-500 text-white shadow-md transition-all"
+                      className="px-4 py-2.5 rounded-xl text-xs font-bold bg-gradient-to-r from-fuchsia-500 to-violet-600 hover:from-fuchsia-400 hover:to-violet-500 text-white shadow-md shadow-fuchsia-500/20 transition-all hover:scale-105 active:scale-95"
                     >
                       הפעל משחק 🚀
                     </Link>
@@ -307,32 +297,32 @@ export default function DashboardPage() {
 
       {/* Modal: Create New Quiz */}
       {isModalOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/70 backdrop-blur-md">
-          <div className="w-full max-w-md glass neon rounded-3xl p-8 border border-white/20 relative animate-in fade-in zoom-in duration-200">
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-md animate-fade-in">
+          <div className="w-full max-w-md glass neon rounded-3xl p-8 border border-white/20 relative shadow-2xl animate-scale-up">
             <button
               onClick={() => setIsModalOpen(false)}
-              className="absolute top-5 left-5 text-white/50 hover:text-white transition-colors"
+              className="absolute top-6 left-6 text-white/50 hover:text-white p-2 rounded-xl hover:bg-white/10 transition-colors"
             >
               ✕
             </button>
 
-            <h2 className="text-2xl font-bold mb-2 text-white">
+            <h2 className="text-2xl font-black mb-2 text-white">
               יצירת חידון חדש 🎯
             </h2>
-            <p className="text-white/60 text-xs mb-6">
-              תן כותרת ותיאור קצר לחידון שלך. לאחר מכן תוכל להוסיף שאלות.
+            <p className="text-white/60 text-xs mb-6 leading-relaxed">
+              תן כותרת ותיאור קצר לחידון שלך. לאחר מכן תועבר מיד לעמוד הוספת השאלות.
             </p>
 
             {errorMsg && (
-              <div className="mb-4 p-3 rounded-xl bg-red-500/10 border border-red-500/30 text-red-200 text-xs">
-                ⚠️ {errorMsg}
+              <div className="mb-4 p-3.5 rounded-2xl bg-red-500/10 border border-red-500/30 text-red-200 text-xs font-medium flex items-center gap-2">
+                <span>⚠️</span> {errorMsg}
               </div>
             )}
 
             <form onSubmit={handleCreateQuiz} className="space-y-4">
               <div>
-                <label className="block text-xs font-bold text-white/80 mb-1">
-                  שם החידון *
+                <label className="block text-xs font-bold text-white/80 mb-1.5">
+                  שם החידון <span className="text-fuchsia-400">*</span>
                 </label>
                 <input
                   type="text"
@@ -340,12 +330,12 @@ export default function DashboardPage() {
                   value={newTitle}
                   onChange={(e) => setNewTitle(e.target.value)}
                   placeholder="למשל: חידון הידע הכללי של המשרד"
-                  className="w-full px-4 py-3 rounded-xl bg-white/5 border border-white/10 text-white placeholder-white/30 focus:outline-none focus:border-fuchsia-400 transition-all text-sm"
+                  className="w-full px-4 py-3.5 rounded-2xl bg-white/5 border border-white/10 text-white placeholder-white/30 focus:outline-none focus:border-fuchsia-400 focus:bg-white/10 transition-all text-sm"
                 />
               </div>
 
               <div>
-                <label className="block text-xs font-bold text-white/80 mb-1">
+                <label className="block text-xs font-bold text-white/80 mb-1.5">
                   תיאור קצר (אופציונלי)
                 </label>
                 <textarea
@@ -353,24 +343,24 @@ export default function DashboardPage() {
                   value={newDescription}
                   onChange={(e) => setNewDescription(e.target.value)}
                   placeholder="תיאור קצר על נושא החידון..."
-                  className="w-full px-4 py-3 rounded-xl bg-white/5 border border-white/10 text-white placeholder-white/30 focus:outline-none focus:border-fuchsia-400 transition-all text-sm resize-none"
+                  className="w-full px-4 py-3.5 rounded-2xl bg-white/5 border border-white/10 text-white placeholder-white/30 focus:outline-none focus:border-fuchsia-400 focus:bg-white/10 transition-all text-sm resize-none"
                 />
               </div>
 
-              <div className="flex items-center justify-end gap-3 pt-2">
+              <div className="flex items-center justify-end gap-3 pt-3">
                 <button
                   type="button"
                   onClick={() => setIsModalOpen(false)}
-                  className="px-4 py-2.5 rounded-xl text-sm font-bold bg-white/5 hover:bg-white/10 text-white/70"
+                  className="px-5 py-3 rounded-2xl text-sm font-bold bg-white/5 hover:bg-white/10 text-white/70 transition-colors"
                 >
                   ביטול
                 </button>
                 <button
                   type="submit"
                   disabled={creating}
-                  className="px-6 py-2.5 rounded-xl text-sm font-bold bg-gradient-to-r from-fuchsia-500 to-violet-600 hover:from-fuchsia-400 hover:to-violet-500 text-white shadow-lg shadow-fuchsia-500/25 transition-all disabled:opacity-50"
+                  className="px-7 py-3 rounded-2xl text-sm font-bold bg-gradient-to-r from-fuchsia-500 to-violet-600 hover:from-fuchsia-400 hover:to-violet-500 text-white shadow-lg shadow-fuchsia-500/25 transition-all disabled:opacity-50 active:scale-95"
                 >
-                  {creating ? 'יוצר...' : 'צור חידון'}
+                  {creating ? 'יוצר חידון...' : 'צור והמשך לעריכה'}
                 </button>
               </div>
             </form>
