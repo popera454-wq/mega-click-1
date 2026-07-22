@@ -53,7 +53,7 @@ export default function HostGamePage({
   const channelRef = useRef<any>(null);
   const timerRef = useRef<any>(null);
 
-  // 1. טעינת נתוני השאלות והחידון
+  // 1. טעינת נתונים
   useEffect(() => {
     const initHost = async () => {
       const { data: { user } } = await supabase.auth.getUser();
@@ -82,12 +82,17 @@ export default function HostGamePage({
     initHost();
   }, [quizId, router]);
 
-  // 2. טעינת רשימת השחקנים מ-game_players
+  // 2. טעינת שחקנים מ-game_players
   const fetchDbPlayers = async () => {
-    const { data } = await supabase
+    const { data, error } = await supabase
       .from('game_players')
       .select('*')
       .eq('game_pin', String(pinCode));
+
+    if (error) {
+      console.error('שגיאה בטעינת שחקנים:', error);
+      return;
+    }
 
     if (data) {
       setPlayers((prev) => {
@@ -106,7 +111,7 @@ export default function HostGamePage({
     }
   };
 
-  // 3. בדיקת תשובות קוליות ישירות מ-game_answers
+  // 3. סריקה אקטיבית של תשובות ב-DB
   const checkPhoneAnswers = async () => {
     if (gameState !== 'QUESTION') return;
 
@@ -123,7 +128,7 @@ export default function HostGamePage({
     }
   };
 
-  // 4. סנכרון + רענון תקופתי
+  // 4. סנכרון תקופתי וחיבור Realtime
   useEffect(() => {
     if (loading) return;
 
@@ -135,11 +140,10 @@ export default function HostGamePage({
       } else if (gameState === 'QUESTION') {
         checkPhoneAnswers();
       }
-    }, 1200);
+    }, 1000);
 
     const channel = supabase.channel(`game_${pinCode}`);
 
-    // תשובות מהאתר
     channel.on('broadcast', { event: 'SUBMIT_ANSWER' }, ({ payload }) => {
       handleAnswerSubmitted(String(payload.playerId), payload.answerIndex, payload.timeTaken);
     });
@@ -147,49 +151,34 @@ export default function HostGamePage({
     channel.subscribe();
     channelRef.current = channel;
 
-    // האזנת Realtime ל-DB
-    const dbSub = supabase
-      .channel(`db_changes_${pinCode}`)
-      .on(
-        'postgres_changes',
-        { event: '*', schema: 'public', table: 'game_players' },
-        () => fetchDbPlayers()
-      )
-      .on(
-        'postgres_changes',
-        { event: 'INSERT', schema: 'public', table: 'game_answers' },
-        (payload) => {
-          const ans = payload.new;
-          if (String(ans.game_pin) === String(pinCode)) {
-            handleAnswerSubmitted(String(ans.phone), ans.answer_index, 5);
-          }
-        }
-      )
-      .subscribe();
-
     return () => {
       clearInterval(interval);
       supabase.removeChannel(channel);
-      supabase.removeChannel(dbSub);
     };
   }, [pinCode, loading, gameState, currentQuestionIndex]);
 
-  // 5. חישוב ניקוד אחיד ומניעת כפילויות
+  // 5. חישוב ניקוד אחיד
   const handleAnswerSubmitted = (identifier: string, answerIndex: number, timeTaken: number) => {
     const currentQ = questions[currentQuestionIndex];
+    if (!currentQ) return;
+
+    const cleanId = identifier.replace(/\D/g, '');
 
     setPlayers((prevPlayers) => {
       let isNewAnswer = false;
 
       const updated = prevPlayers.map((p) => {
+        const cleanPlayerPhone = p.phone.replace(/\D/g, '');
+
         const match =
-          p.phone === identifier ||
           p.id === identifier ||
-          p.phone.endsWith(identifier) ||
-          identifier.endsWith(p.phone);
+          p.phone === identifier ||
+          (cleanId.length > 3 && cleanPlayerPhone.length > 3 && (
+            cleanId.endsWith(cleanPlayerPhone) || cleanPlayerPhone.endsWith(cleanId)
+          ));
 
         if (match) {
-          if (p.lastAnswerIndex !== undefined) return p; // כבר ענה
+          if (p.lastAnswerIndex !== undefined) return p;
 
           isNewAnswer = true;
           const isCorrect = answerIndex === currentQ.correct_option;
@@ -214,7 +203,7 @@ export default function HostGamePage({
     });
   };
 
-  // מנגנון הטיימר לשאלה
+  // מנגנון הטיימר
   useEffect(() => {
     if (gameState === 'QUESTION' && timeLeft > 0) {
       timerRef.current = setInterval(() => {
@@ -229,7 +218,7 @@ export default function HostGamePage({
 
   const startGame = () => {
     if (players.length === 0) {
-      alert('יש להמתין לפחות לשחקן אחד לפני התחלת המשחק!');
+      alert('יש להמתין לפחות לשחקן אחד!');
       return;
     }
     startQuestion(0);
@@ -270,18 +259,22 @@ export default function HostGamePage({
 
   const showLeaderboard = () => setGameState('LEADERBOARD');
 
-  // 🧹 ניקוי מלא מכל 3 הטבלאות ב-DB בסיום המשחק!
+  // 🧹 מחיקה מובטחת מכל 3 הטבלאות
   const finishGameCleanup = async () => {
     setGameState('GAME_OVER');
 
     const pinStr = String(pinCode);
 
-    // ניקוי במקביל של כל 3 הטבלאות
-    await Promise.all([
+    // ביצוע מחיקה מפורשת
+    const [resPlayers, resAnswers, resSessions] = await Promise.all([
       supabase.from('game_players').delete().eq('game_pin', pinStr),
       supabase.from('game_answers').delete().eq('game_pin', pinStr),
       supabase.from('ivr_sessions').delete().eq('pin', pinStr)
     ]);
+
+    if (resPlayers.error) console.error("שגיאה במחיקת שחקנים:", resPlayers.error);
+    if (resAnswers.error) console.error("שגיאה במחיקת תשובות:", resAnswers.error);
+    if (resSessions.error) console.error("שגיאה במחיקת סשנים:", resSessions.error);
 
     channelRef.current?.send({
       type: 'broadcast',
@@ -300,7 +293,7 @@ export default function HostGamePage({
 
   if (loading) {
     return (
-      <main className="min-h-screen grid-bg bg-[#0d041e] text-white flex justify-center items-center dir-rtl">
+      <main className="min-h-screen bg-[#0d041e] text-white flex justify-center items-center dir-rtl">
         <p className="text-white/60 animate-pulse">מכין את קוד המשחק...</p>
       </main>
     );
@@ -310,7 +303,7 @@ export default function HostGamePage({
   const sortedPlayers = [...players].sort((a, b) => b.score - a.score);
 
   return (
-    <main className="min-h-screen grid-bg bg-[#0d041e] text-white dir-rtl flex flex-col justify-between p-6 md:p-10 select-none">
+    <main className="min-h-screen bg-[#0d041e] text-white dir-rtl flex flex-col justify-between p-6 md:p-10 select-none">
       <header className="flex items-center justify-between border-b border-white/10 pb-4">
         <div>
           <h1 className="text-2xl font-black text-fuchsia-300">{quizTitle}</h1>
@@ -319,7 +312,7 @@ export default function HostGamePage({
 
         <div className="flex items-center gap-4">
           <div className="bg-white/10 px-6 py-2 rounded-2xl border border-white/20 text-center">
-            <span className="text-xs text-white/60 block">קוד הצטרפות PIN:</span>
+            <span className="text-xs text-white/60 block">קוד PIN:</span>
             <span className="text-3xl font-black tracking-widest text-fuchsia-400">
               {pinCode}
             </span>
@@ -330,7 +323,7 @@ export default function HostGamePage({
         </div>
       </header>
 
-      {/* LOBBY STATE */}
+      {/* LOBBY */}
       {gameState === 'LOBBY' && (
         <div className="max-w-4xl mx-auto w-full text-center py-12">
           <h2 className="text-3xl md:text-5xl font-black mb-3">
@@ -349,7 +342,7 @@ export default function HostGamePage({
               players.map((p) => (
                 <div
                   key={p.id}
-                  className="bg-gradient-to-r from-fuchsia-500/20 to-violet-500/20 border border-fuchsia-500/40 px-6 py-3 rounded-2xl font-bold text-lg animate-in zoom-in duration-200"
+                  className="bg-gradient-to-r from-fuchsia-500/20 to-violet-500/20 border border-fuchsia-500/40 px-6 py-3 rounded-2xl font-bold text-lg"
                 >
                   👤 {p.name}
                 </div>
@@ -363,7 +356,7 @@ export default function HostGamePage({
             </span>
             <button
               onClick={startGame}
-              className="px-10 py-4 rounded-2xl font-black text-xl bg-gradient-to-r from-fuchsia-500 to-violet-600 hover:from-fuchsia-400 hover:to-violet-500 shadow-xl shadow-fuchsia-500/30 transition-all active:scale-95"
+              className="px-10 py-4 rounded-2xl font-black text-xl bg-gradient-to-r from-fuchsia-500 to-violet-600 hover:from-fuchsia-400 hover:to-violet-500 shadow-xl transition-all"
             >
               התחל משחק 🚀
             </button>
@@ -371,8 +364,8 @@ export default function HostGamePage({
         </div>
       )}
 
-      {/* QUESTION STATE */}
-      {gameState === 'QUESTION' && (
+      {/* QUESTION */}
+      {gameState === 'QUESTION' && currentQ && (
         <div className="max-w-5xl mx-auto w-full py-6">
           <div className="flex justify-between items-center mb-6">
             <span className="text-sm font-bold text-fuchsia-300">
@@ -411,8 +404,8 @@ export default function HostGamePage({
         </div>
       )}
 
-      {/* SHOW RESULT STATE */}
-      {gameState === 'SHOW_RESULT' && (
+      {/* SHOW RESULT */}
+      {gameState === 'SHOW_RESULT' && currentQ && (
         <div className="max-w-4xl mx-auto w-full text-center py-10">
           <h2 className="text-4xl font-black mb-8">התשובה הנכונה היא:</h2>
           <div className="glass p-8 rounded-3xl border-2 border-emerald-500 bg-emerald-500/10 text-3xl font-black text-emerald-300 mb-10">
@@ -427,7 +420,7 @@ export default function HostGamePage({
         </div>
       )}
 
-      {/* LEADERBOARD STATE */}
+      {/* LEADERBOARD */}
       {gameState === 'LEADERBOARD' && (
         <div className="max-w-3xl mx-auto w-full py-6">
           <h2 className="text-4xl font-black text-center mb-8">טבלת מובילים 🏆</h2>
@@ -458,12 +451,12 @@ export default function HostGamePage({
         </div>
       )}
 
-      {/* GAME OVER STATE */}
+      {/* GAME OVER */}
       {gameState === 'GAME_OVER' && (
         <div className="max-w-3xl mx-auto w-full text-center py-12">
           <h2 className="text-5xl font-black mb-4">המנצחים הגדולים! 🎉</h2>
           {sortedPlayers.length > 0 && (
-            <div className="glass neon p-8 rounded-3xl border border-fuchsia-500/50 my-8">
+            <div className="glass p-8 rounded-3xl border border-fuchsia-500/50 my-8">
               <div className="text-6xl mb-2">🥇</div>
               <h3 className="text-3xl font-black text-fuchsia-300">
                 {sortedPlayers[0]?.name}
