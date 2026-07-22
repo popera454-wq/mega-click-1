@@ -229,7 +229,8 @@ async function handleRequest(req: Request) {
 }
 
 function makeIvrRead(text: string, valName: string, minDigits = 1, maxDigits = 1, timeout = 10) {
-  const responseText = `read=t-${text}=${valName},no,${minDigits},${maxDigits},${timeout},Digits,no,no,`;
+  // הסרת הפסיק האחרון כדי למנוע שיבושי תווים בימות המשיח
+  const responseText = `read=t-${text}=${valName},no,${minDigits},${maxDigits},${timeout},Digits,no,no`;
   return new Response(responseText, {
     status: 200,
     headers: {
@@ -239,7 +240,8 @@ function makeIvrRead(text: string, valName: string, minDigits = 1, maxDigits = 1
 }
 
 function makeIvrWait(text: string) {
-  const responseText = `read=t-${text}=q_wait,no,1,1,2,Digits,no,no,`;
+  // הסרת הפסיק האחרון למניעת שיבושים
+  const responseText = `read=t-${text}=q_wait,no,1,1,2,Digits,no,no`;
   return new Response(responseText, {
     status: 200,
     headers: {
