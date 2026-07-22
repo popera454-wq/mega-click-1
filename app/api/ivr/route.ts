@@ -23,14 +23,22 @@ async function handleRequest(req: Request) {
   try {
     const { searchParams } = new URL(req.url);
 
-    const rawPhone = searchParams.get("ApiPhone") || searchParams.get("phone") || searchParams.get("ApiDID") || "";
+    const rawPhone =
+      searchParams.get("ApiPhone") ||
+      searchParams.get("phone") ||
+      searchParams.get("ApiDID") ||
+      "";
     const phone = cleanPhone(rawPhone);
-    const inputPin = String(searchParams.get("q_pin") || searchParams.get("val_name_q_pin") || "").trim();
-    const inputAns = String(searchParams.get("q_ans") || searchParams.get("val_name_q_ans") || "").trim();
+    const inputPin = String(
+      searchParams.get("q_pin") || searchParams.get("val_name_q_pin") || ""
+    ).trim();
+    const inputAns = String(
+      searchParams.get("q_ans") || searchParams.get("val_name_q_ans") || ""
+    ).trim();
 
     // אין זיהוי טלפון
     if (!phone) {
-      return sendIvrResponse("read=t-שלום הקש את קוד המשחק=q_pin,no,6,6,10,Digits,no,no,");
+      return sendIvrResponse("read=t-שלום הקש את קוד המשחק=q_pin,no,3,8,10,Digits,no,no,");
     }
 
     // קבלת סשן טלפוני קיים
@@ -50,23 +58,28 @@ async function handleRequest(req: Request) {
 
     // === מקרה א': המשתמש מקיש PIN (או שאין סשן פעיל) ===
     if ((inputPin && inputPin !== activePin) || (!activePin && inputPin)) {
-      if (!/^\d{6}$/.test(inputPin)) {
-        return sendIvrResponse("read=t-קוד לא תקין הקש קוד בן שש ספרות=q_pin,no,6,6,10,Digits,no,no,");
+      // בדיקה גמישה לאורך קוד המשחק (בין 3 ל-8 ספרות)
+      if (!/^\d{3,8}$/.test(inputPin)) {
+        return sendIvrResponse("read=t-קוד לא תקין הקש את קוד המשחק=q_pin,no,3,8,10,Digits,no,no,");
       }
 
-      // בדיקה שהמשחק אכן קיים ופעיל בטבלת games
-      const { data: gameExists } = await supabase
+      // 1. ניסיון איתור משחק פעיל לפי ה-PIN
+      const { data: rawGames } = await supabase
         .from("games")
-        .select("id")
-        .eq("pin", inputPin)
-        .neq("status", "finished")
-        .maybeSingle();
+        .select("id, pin, status")
+        .eq("pin", inputPin);
 
-      if (!gameExists) {
-        return sendIvrResponse("read=t-משחק לא קיים או שהסתיים נסה שוב=q_pin,no,6,6,10,Digits,no,no,");
+      // סינון משחקים שאינם בסטטוס finished (בלי תלות באותיות גדולות/קטנות)
+      const validGame = rawGames?.find(
+        (g) => String(g.status).toLowerCase() !== "finished"
+      );
+
+      if (!validGame) {
+        console.log(`[IVR LOG] Game not found or finished for PIN: ${inputPin}`);
+        return sendIvrResponse("read=t-משחק לא קיים או שהסתיים נסה שוב=q_pin,no,3,8,10,Digits,no,no,");
       }
 
-      // שמירת/עדכון החיבור בסשן (שימוש ב-upsert במקום delete+insert למניעת שגיאות DB)
+      // שמירת/עדכון החיבור בסשן
       await supabase.from("ivr_sessions").upsert(
         {
           phone,
@@ -105,7 +118,7 @@ async function handleRequest(req: Request) {
         const numericAns = parseInt(inputAns, 10);
 
         if (!isNaN(numericAns) && numericAns >= 1 && numericAns <= 4) {
-          const answerIndex = numericAns - 1; 
+          const answerIndex = numericAns - 1;
 
           const { data: gameData } = await supabase
             .from("games")
@@ -148,11 +161,10 @@ async function handleRequest(req: Request) {
     }
 
     // === מקרה ג': ברירת מחדל ===
-    return sendIvrResponse("read=t-ברוכים הבאים הקש את קוד המשחק=q_pin,no,6,6,10,Digits,no,no,");
-    
+    return sendIvrResponse("read=t-ברוכים הבאים הקש את קוד המשחק=q_pin,no,3,8,10,Digits,no,no,");
   } catch (err) {
     console.error("IVR Error:", err);
-    return sendIvrResponse("read=t-אירעה שגיאה הקש את קוד המשחק=q_pin,no,6,6,10,Digits,no,no,");
+    return sendIvrResponse("read=t-אירעה שגיאה הקש את קוד המשחק=q_pin,no,3,8,10,Digits,no,no,");
   }
 }
 
