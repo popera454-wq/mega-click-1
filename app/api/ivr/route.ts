@@ -10,7 +10,7 @@ export async function POST(req: Request) {
   return handleRequest(req);
 }
 
-// ניקוי מספר טלפון לפורמט אחיד
+// ניקוי מספר טלפון לפורמט אחיד נקי (ספרות בלבד)
 function cleanPhone(p: string): string {
   let cleaned = p.replace(/\D/g, "");
   if (cleaned.startsWith("972")) {
@@ -23,7 +23,7 @@ async function handleRequest(req: Request) {
   try {
     const { searchParams } = new URL(req.url);
 
-    const rawPhone = searchParams.get("ApiPhone") || searchParams.get("phone") || "";
+    const rawPhone = searchParams.get("ApiPhone") || searchParams.get("phone") || searchParams.get("ApiDID") || "";
     const phone = cleanPhone(rawPhone);
     const inputPin = String(searchParams.get("q_pin") || searchParams.get("val_name_q_pin") || "").trim();
     const inputAns = String(searchParams.get("q_ans") || searchParams.get("val_name_q_ans") || "").trim();
@@ -48,8 +48,8 @@ async function handleRequest(req: Request) {
 
     const activePin = session?.pin ? String(session.pin) : null;
 
-    // === מקרה א': המשתמש הקיש קוד PIN חדש ===
-    if (inputPin && inputPin !== activePin) {
+    // === מקרה א': המשתמש מקיש PIN (או שאין סשן פעיל) ===
+    if ((inputPin && inputPin !== activePin) || (!activePin && inputPin)) {
       if (!/^\d{6}$/.test(inputPin)) {
         return sendIvrResponse("read=t-קוד לא תקין הקש קוד בן שש ספרות=q_pin,no,6,6,10,Digits,no,no,");
       }
@@ -63,19 +63,21 @@ async function handleRequest(req: Request) {
         .maybeSingle();
 
       if (!gameExists) {
-         return sendIvrResponse("read=t-משחק לא קיים או שהסתיים. נסה שוב=q_pin,no,6,6,10,Digits,no,no,");
+        return sendIvrResponse("read=t-משחק לא קיים או שהסתיים נסה שוב=q_pin,no,6,6,10,Digits,no,no,");
       }
 
-      // שמירת החיבור בסשן
-      await supabase.from("ivr_sessions").delete().eq("phone", phone);
-      await supabase.from("ivr_sessions").insert({
-        phone,
-        pin: inputPin,
-        status: "ACTIVE",
-        updated_at: new Date().toISOString(),
-      });
+      // שמירת/עדכון החיבור בסשן (שימוש ב-upsert במקום delete+insert למניעת שגיאות DB)
+      await supabase.from("ivr_sessions").upsert(
+        {
+          phone,
+          pin: inputPin,
+          status: "ACTIVE",
+          updated_at: new Date().toISOString(),
+        },
+        { onConflict: "phone" }
+      );
 
-      // כניסה למשחק עצמו (טבלת שחקנים)
+      // כניסה למשחק (טבלת שחקנים)
       const { data: existingPlayer } = await supabase
         .from("game_players")
         .select("id")
@@ -92,24 +94,12 @@ async function handleRequest(req: Request) {
         });
       }
 
+      // החזרת הוראה ברורה לקליטת תשובה
       return sendIvrResponse("read=t-התחברת בהצלחה הקש את מספר התשובה=q_ans,no,1,1,15,Digits,no,no,");
     }
 
     // === מקרה ב': המשתמש מחובר ויש לו סשן פעיל ===
     if (activePin) {
-      const { data: activePlayer } = await supabase
-        .from("game_players")
-        .select("id")
-        .eq("game_pin", activePin)
-        .eq("phone", phone)
-        .maybeSingle();
-
-      // אם המנחה העיף את השחקן
-      if (!activePlayer) {
-        await supabase.from("ivr_sessions").delete().eq("phone", phone);
-        return sendIvrResponse("id_list_message=t-הוצאת מהמשחק. תודה&go_to_folder=hangup");
-      }
-
       // קליטת תשובה מהמשתמש
       if (inputAns) {
         const numericAns = parseInt(inputAns, 10);
@@ -117,7 +107,6 @@ async function handleRequest(req: Request) {
         if (!isNaN(numericAns) && numericAns >= 1 && numericAns <= 4) {
           const answerIndex = numericAns - 1; 
 
-          // הבאת זמן השאלה לחישוב הניקוד
           const { data: gameData } = await supabase
             .from("games")
             .select("current_question_index, question_start_time")
@@ -126,17 +115,16 @@ async function handleRequest(req: Request) {
 
           const currentQIndex = gameData?.current_question_index ?? 0;
 
-          // חישוב בונוס לפי זמן
           let timeBonus = 1000;
           if (gameData?.question_start_time) {
             const startTime = new Date(gameData.question_start_time).getTime();
             const elapsedSeconds = Math.max(0, (Date.now() - startTime) / 1000);
-            const timeLimit = 30; // אפשר לשנות לפי הצורך
+            const timeLimit = 30;
             const scoreFactor = Math.max(0, (timeLimit - elapsedSeconds) / timeLimit);
             timeBonus = Math.round(500 + 500 * scoreFactor);
           }
 
-          // שמירת התשובה במסד הנתונים
+          // שמירת התשובה
           await supabase.from("game_answers").upsert(
             {
               game_pin: activePin,
@@ -155,10 +143,11 @@ async function handleRequest(req: Request) {
         }
       }
 
+      // אם מחובר אבל עדיין לא שלח תשובה לבקשה הנוכחית
       return sendIvrResponse("read=t-הקש את מספר התשובה=q_ans,no,1,1,15,Digits,no,no,");
     }
 
-    // === מקרה ג': אם שום דבר לא תפס ===
+    // === מקרה ג': ברירת מחדל ===
     return sendIvrResponse("read=t-ברוכים הבאים הקש את קוד המשחק=q_pin,no,6,6,10,Digits,no,no,");
     
   } catch (err) {
