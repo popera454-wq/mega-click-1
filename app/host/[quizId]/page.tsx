@@ -50,6 +50,7 @@ export default function HostGamePage() {
 
   const channelRef = useRef<RealtimeChannel | null>(null);
   const timerRef = useRef<NodeJS.Timeout | null>(null);
+  const questionStartTimeRef = useRef<number>(Date.now());
 
   // פונקציית עזר לפריסת המערך בבטחה
   const getParsedOptions = (options: string[] | string | undefined): string[] => {
@@ -66,7 +67,7 @@ export default function HostGamePage() {
     return [];
   };
 
-  // 1. טעינת נתונים
+  // 1. טעינת נתונים ראשונית
   useEffect(() => {
     if (!quizId) return;
 
@@ -105,7 +106,7 @@ export default function HostGamePage() {
     initHost();
   }, [quizId, router]);
 
-  // 2. טעינת שחקנים מ-game_players
+  // 2. טעינת שחקנים מ-game_players (תומך גם בשחקנים שמצטרפים באמצע)
   const fetchDbPlayers = useCallback(async () => {
     const { data, error } = await supabase
       .from('game_players')
@@ -191,7 +192,7 @@ export default function HostGamePage() {
     [questions, currentQuestionIndex]
   );
 
-  // 4. סריקה אקטיבית של תשובות ב-DB
+  // 4. סריקה אקטיבית של תשובות ב-DB עם חישוב זמן דינמי
   const checkPhoneAnswers = useCallback(async () => {
     if (gameState !== 'QUESTION') return;
 
@@ -204,7 +205,13 @@ export default function HostGamePage() {
     if (data && data.length > 0) {
       data.forEach((ans) => {
         if (ans.phone !== undefined) {
-          handleAnswerSubmitted(String(ans.phone), ans.answer_index, 5);
+          // חישוב זמן הגשת התשובה לפי זמן תחילת השאלה
+          const answerTime = ans.created_at
+            ? (new Date(ans.created_at).getTime() - questionStartTimeRef.current) / 1000
+            : (Date.now() - questionStartTimeRef.current) / 1000;
+
+          const timeTaken = Math.max(0, answerTime);
+          handleAnswerSubmitted(String(ans.phone), ans.answer_index, timeTaken);
         }
       });
     }
@@ -216,10 +223,10 @@ export default function HostGamePage() {
 
     fetchDbPlayers();
 
+    // סריקת שחקנים ותשובות באופן שוטף
     const interval = setInterval(() => {
-      if (gameState === 'LOBBY') {
-        fetchDbPlayers();
-      } else if (gameState === 'QUESTION') {
+      fetchDbPlayers(); // מאפשר הצטרפות שחקנים גם תוך כדי משחק
+      if (gameState === 'QUESTION') {
         checkPhoneAnswers();
       }
     }, 1000);
@@ -252,6 +259,20 @@ export default function HostGamePage() {
     handleAnswerSubmitted,
   ]);
 
+  const endQuestion = useCallback(() => {
+    if (timerRef.current) clearInterval(timerRef.current);
+    setGameState('SHOW_RESULT');
+
+    const currentQ = questions[currentQuestionIndex];
+    if (!currentQ) return;
+
+    channelRef.current?.send({
+      type: 'broadcast',
+      event: 'QUESTION_END',
+      payload: { correctOption: currentQ.correct_option },
+    });
+  }, [questions, currentQuestionIndex]);
+
   // מנגנון הטיימר
   useEffect(() => {
     if (gameState === 'QUESTION' && timeLeft > 0) {
@@ -265,7 +286,7 @@ export default function HostGamePage() {
     return () => {
       if (timerRef.current) clearInterval(timerRef.current);
     };
-  }, [gameState, timeLeft]);
+  }, [gameState, timeLeft, endQuestion]);
 
   const startGame = () => {
     if (questions.length === 0) {
@@ -286,6 +307,7 @@ export default function HostGamePage() {
     setCurrentQuestionIndex(index);
     setAnswersCount(0);
     setTimeLeft(q.time_limit || 20);
+    questionStartTimeRef.current = Date.now();
     setGameState('QUESTION');
 
     setPlayers((prev) =>
@@ -306,29 +328,13 @@ export default function HostGamePage() {
     });
   };
 
-  const endQuestion = () => {
-    if (timerRef.current) clearInterval(timerRef.current);
-    setGameState('SHOW_RESULT');
-
-    const currentQ = questions[currentQuestionIndex];
-    if (!currentQ) return;
-
-    channelRef.current?.send({
-      type: 'broadcast',
-      event: 'QUESTION_END',
-      payload: { correctOption: currentQ.correct_option },
-    });
-  };
-
   const showLeaderboard = () => setGameState('LEADERBOARD');
 
-  // הפונקציה המעודכנת לפי הבקשה שלך
   const finishGameCleanup = async () => {
     setGameState('GAME_OVER');
     const pinStr = String(pinCode);
 
     try {
-      // 1. איסוף כל מספרי הטלפון של השחקנים שנרשמו למשחק הנוכחי
       const { data: dbPlayers } = await supabase
         .from('game_players')
         .select('phone')
@@ -337,7 +343,6 @@ export default function HostGamePage() {
       const phones =
         dbPlayers?.map((p) => String(p.phone)).filter(Boolean) || [];
 
-      // 2. עדכון ivr_sessions ל-FINISHED כדי לשלוח פקודת ניתוק קולית
       await supabase
         .from('ivr_sessions')
         .update({ status: 'FINISHED' })
@@ -350,17 +355,14 @@ export default function HostGamePage() {
           .in('phone', phones);
       }
 
-      // 3. שידור GAME_OVER בזמן אמת לשחקני ה-Web
       channelRef.current?.send({
         type: 'broadcast',
         event: 'GAME_OVER',
         payload: {},
       });
 
-      // 4. השהיה של 1.5 שניות המאפשרת למרכזיה לקבל את פקודת הניתוק
       await new Promise((res) => setTimeout(res, 1500));
 
-      // 5. מחיקה מוחלטת מכל טבלאות ה-DB לפי PIN ולפי טלפונים
       await supabase.from('game_answers').delete().eq('game_pin', pinStr);
       await supabase.from('game_players').delete().eq('game_pin', pinStr);
       await supabase.from('ivr_sessions').delete().eq('pin', pinStr);
