@@ -98,9 +98,8 @@ async function handleRequest(req: Request) {
       return sendIvrResponse("read=t-התחברת בהצלחה הקש את מספר התשובה=q_ans,no,1,1,15,Digits,no,no,");
     }
 
-    // === מקרה ב': משתמש מחובר ושולח תשובה ===
+    // === מקרה ב': משתמש מחובר ===
     if (activePin) {
-      // שליפת נתוני המשחק והשאלה הנוכחית כדי להתאים את סוג השאלה
       const { data: gameData } = await supabase
         .from("games")
         .select("current_question_index, question_start_time, status")
@@ -114,7 +113,7 @@ async function handleRequest(req: Request) {
 
       const currentQIndex = gameData.current_question_index ?? 0;
 
-      // בדיקת סוג השאלה במסד הנתונים
+      // בדיקת סוג השאלה
       const { data: questionData } = await supabase
         .from("questions")
         .select("question_type")
@@ -125,11 +124,23 @@ async function handleRequest(req: Request) {
       const qType = questionData?.question_type || "single_choice";
       const submittedAnswer = qType === "range" ? inputRange : inputAns;
 
-      if (submittedAnswer) {
+      // בדיקה האם השחקן כבר ענה על השאלה הנוכחית
+      const { data: existingAnswer } = await supabase
+        .from("game_answers")
+        .select("question_index")
+        .eq("game_pin", activePin)
+        .eq("phone", phone)
+        .eq("question_index", currentQIndex)
+        .maybeSingle();
+
+      // אם המשתמש שלח תשובה עכשיו
+      if (submittedAnswer && !existingAnswer) {
+        const answerTime = new Date();
         let timeBonus = 1000;
+
         if (gameData?.question_start_time) {
           const startTime = new Date(gameData.question_start_time).getTime();
-          const elapsedSeconds = Math.max(0, (Date.now() - startTime) / 1000);
+          const elapsedSeconds = Math.max(0, (answerTime.getTime() - startTime) / 1000);
           const timeLimit = 30;
           const scoreFactor = Math.max(0, (timeLimit - elapsedSeconds) / timeLimit);
           timeBonus = Math.round(500 + 500 * scoreFactor);
@@ -147,6 +158,7 @@ async function handleRequest(req: Request) {
           }
         }
 
+        // שמירת התשובה עם זמן הלחיצה המדויק
         await supabase.from("game_answers").upsert(
           {
             game_pin: activePin,
@@ -155,34 +167,27 @@ async function handleRequest(req: Request) {
             answer_index: answerIndex,
             answer_value: answerValue,
             score_awarded: timeBonus,
-            created_at: new Date().toISOString(),
+            created_at: answerTime.toISOString(),
           },
           { onConflict: "game_pin,phone,question_index" }
         );
 
-        return sendIvrResponse("read=t-התשובה נקלטה לשאלה הבאה הקש את מספר התשובה=q_ans,no,1,1,15,Digits,no,no,");
+        // הודעה שקטה/קצרה שלא מבקשת שוב קלט אלא מעבירה למצב המתנה לשאלה הבאה
+        return sendIvrResponse("id_list_message=t-התשובה נקלטה בהצלחה. המתן לשאלה הבאה");
       }
 
-      // בדיקה האם השחקן כבר ענה על השאלה הנוכחית כדי לא להציק לו
-      const { data: existingAnswer } = await supabase
-        .from("game_answers")
-        .select("question_index")
-        .eq("game_pin", activePin)
-        .eq("phone", phone)
-        .eq("question_index", currentQIndex)
-        .maybeSingle();
-
+      // אם כבר ענה בעבר על השאלה הנוכחית – לא מציקים לו ולא שואלים שוב, רק מחכים בסבלנות בשקט
       if (existingAnswer) {
-        return sendIvrResponse("read=t-התשובה כבר נקלטה המתן לשאלה הבאה=q_ans,no,1,1,15,Digits,no,no,");
+        return sendIvrResponse("id_list_message=t-התשובה כבר נקלטה. ממתין לשאלה הבאה");
       }
 
-      // התאמת הקול לפי סוג השאלה (שליחה מיידית בלי עיכובים מיותרים)
+      // אם טרם ענה - נציג את השאלה פעם אחת בלבד עם זמן השהייה ארוך (20 שניות) למניעת קריאות חוזרות ונשנות
       if (qType === "range") {
-        return sendIvrResponse("read=t-הקש את המספר הרצוי וסיום בסולמית=q_range,no,1,6,10,Digits,no,no,");
+        return sendIvrResponse("read=t-הקש את המספר הרצוי וסיום בסולמית=q_range,no,1,6,20,Digits,no,no,");
       } else if (qType === "poll") {
-        return sendIvrResponse("read=t-שאלת סקר הקש את מספר התשובה=q_ans,no,1,1,15,Digits,no,no,");
+        return sendIvrResponse("read=t-שאלת סקר הקש את מספר התשובה=q_ans,no,1,1,20,Digits,no,no,");
       } else {
-        return sendIvrResponse("read=t-הקש את מספר התשובה=q_ans,no,1,1,15,Digits,no,no,");
+        return sendIvrResponse("read=t-הקש את מספר התשובה=q_ans,no,1,1,20,Digits,no,no,");
       }
     }
 
