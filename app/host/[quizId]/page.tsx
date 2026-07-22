@@ -1,15 +1,15 @@
 'use client';
 
-import React, { useState, useEffect, useRef, useCallback, use } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import Link from 'next/link';
-import { useRouter } from 'next/navigation';
+import { useRouter, useParams } from 'next/navigation';
 import { supabase } from '@/lib/supabase';
 import { RealtimeChannel } from '@supabase/supabase-js';
 
 interface Question {
   id: string;
   question_text: string;
-  options: string[];
+  options: string[] | string;
   correct_option: number;
   time_limit: number;
 }
@@ -29,13 +29,10 @@ type GameState =
   | 'LEADERBOARD'
   | 'GAME_OVER';
 
-export default function HostGamePage({
-  params,
-}: {
-  params: Promise<{ quizId: string }>;
-}) {
-  const { quizId } = use(params);
+export default function HostGamePage() {
   const router = useRouter();
+  const routeParams = useParams();
+  const quizId = (routeParams?.quizId as string) || '';
 
   const [pinCode] = useState(() =>
     Math.floor(100000 + Math.random() * 900000).toString()
@@ -54,8 +51,25 @@ export default function HostGamePage({
   const channelRef = useRef<RealtimeChannel | null>(null);
   const timerRef = useRef<NodeJS.Timeout | null>(null);
 
-  // 1. טעינת נתונים ראשונית של השאלון והשאלות
+  // פונקציית עזר לפריסת המערך בבטחה
+  const getParsedOptions = (options: string[] | string | undefined): string[] => {
+    if (!options) return [];
+    if (Array.isArray(options)) return options;
+    if (typeof options === 'string') {
+      try {
+        const parsed = JSON.parse(options);
+        return Array.isArray(parsed) ? parsed : [];
+      } catch {
+        return [];
+      }
+    }
+    return [];
+  };
+
+  // 1. טעינת נתונים
   useEffect(() => {
+    if (!quizId) return;
+
     const initHost = async () => {
       try {
         const {
@@ -67,30 +81,22 @@ export default function HostGamePage({
           return;
         }
 
-        const { data: quizData, error: quizError } = await supabase
+        const { data: quizData } = await supabase
           .from('quizzes')
           .select('title')
           .eq('id', quizId)
           .single();
 
-        if (quizError) {
-          console.error('שגיאה בטעינת השאלון:', quizError);
-        }
-
-        const { data: qData, error: qError } = await supabase
+        const { data: qData } = await supabase
           .from('questions')
           .select('*')
           .eq('quiz_id', quizId)
           .order('created_at', { ascending: true });
 
-        if (qError) {
-          console.error('שגיאה בטעינת השאלות:', qError);
-        }
-
         if (quizData) setQuizTitle(quizData.title);
         if (qData && qData.length > 0) setQuestions(qData);
       } catch (err) {
-        console.error('שגיאה כללית בטעינת הנתונים:', err);
+        console.error('שגיאה בטעינת נתונים:', err);
       } finally {
         setLoading(false);
       }
@@ -114,7 +120,7 @@ export default function HostGamePage({
     if (data) {
       setPlayers((prev) => {
         return data.map((dbP) => {
-          const playerPhone = String(dbP.phone || dbP.id);
+          const playerPhone = String(dbP.phone || dbP.id || '');
           const existing = prev.find(
             (p) => p.phone === playerPhone || p.id === dbP.id
           );
@@ -134,9 +140,9 @@ export default function HostGamePage({
   const handleAnswerSubmitted = useCallback(
     (identifier: string, answerIndex: number, timeTaken: number) => {
       const currentQ = questions[currentQuestionIndex];
-      if (!currentQ) return;
+      if (!currentQ || identifier === undefined || identifier === null) return;
 
-      const cleanId = identifier.replace(/\D/g, '');
+      const cleanId = String(identifier).replace(/\D/g, '');
 
       setPlayers((prevPlayers) => {
         let isNewAnswer = false;
@@ -189,20 +195,17 @@ export default function HostGamePage({
   const checkPhoneAnswers = useCallback(async () => {
     if (gameState !== 'QUESTION') return;
 
-    const { data, error } = await supabase
+    const { data } = await supabase
       .from('game_answers')
       .select('*')
       .eq('game_pin', String(pinCode))
       .eq('question_index', currentQuestionIndex);
 
-    if (error) {
-      console.error('שגיאה בטעינת תשובות:', error);
-      return;
-    }
-
     if (data && data.length > 0) {
       data.forEach((ans) => {
-        handleAnswerSubmitted(String(ans.phone), ans.answer_index, 5);
+        if (ans.phone !== undefined) {
+          handleAnswerSubmitted(String(ans.phone), ans.answer_index, 5);
+        }
       });
     }
   }, [gameState, pinCode, currentQuestionIndex, handleAnswerSubmitted]);
@@ -224,11 +227,13 @@ export default function HostGamePage({
     const channel = supabase.channel(`game_${pinCode}`);
 
     channel.on('broadcast', { event: 'SUBMIT_ANSWER' }, ({ payload }) => {
-      handleAnswerSubmitted(
-        String(payload.playerId),
-        payload.answerIndex,
-        payload.timeTaken
-      );
+      if (payload) {
+        handleAnswerSubmitted(
+          String(payload.playerId),
+          payload.answerIndex,
+          payload.timeTaken || 0
+        );
+      }
     });
 
     channel.subscribe();
@@ -247,7 +252,7 @@ export default function HostGamePage({
     handleAnswerSubmitted,
   ]);
 
-  // מנגנון הטיימר לשאלה הנוכחית
+  // מנגנון הטיימר
   useEffect(() => {
     if (gameState === 'QUESTION' && timeLeft > 0) {
       timerRef.current = setInterval(() => {
@@ -263,6 +268,10 @@ export default function HostGamePage({
   }, [gameState, timeLeft]);
 
   const startGame = () => {
+    if (questions.length === 0) {
+      alert('לא נמצאו שאלות בשאלון זה!');
+      return;
+    }
     if (players.length === 0) {
       alert('יש להמתין לפחות לשחקן אחד!');
       return;
@@ -271,25 +280,28 @@ export default function HostGamePage({
   };
 
   const startQuestion = (index: number) => {
-    if (!questions[index]) return;
+    const q = questions[index];
+    if (!q) return;
 
     setCurrentQuestionIndex(index);
     setAnswersCount(0);
-    setTimeLeft(questions[index].time_limit || 20);
+    setTimeLeft(q.time_limit || 20);
     setGameState('QUESTION');
 
     setPlayers((prev) =>
       prev.map((p) => ({ ...p, lastAnswerIndex: undefined }))
     );
 
+    const parsedOptions = getParsedOptions(q.options);
+
     channelRef.current?.send({
       type: 'broadcast',
       event: 'QUESTION_START',
       payload: {
         questionIndex: index,
-        questionText: questions[index].question_text,
-        options: questions[index].options,
-        timeLimit: questions[index].time_limit || 20,
+        questionText: q.question_text,
+        options: parsedOptions,
+        timeLimit: q.time_limit || 20,
       },
     });
   };
@@ -310,13 +322,13 @@ export default function HostGamePage({
 
   const showLeaderboard = () => setGameState('LEADERBOARD');
 
-  // ניתוק שיחות IVR ומחיקת נתונים מכל הטבלאות
+  // הפונקציה המעודכנת לפי הבקשה שלך
   const finishGameCleanup = async () => {
     setGameState('GAME_OVER');
     const pinStr = String(pinCode);
 
     try {
-      // א. שולפים מראש את כל מספרי הטלפון שהשתתפו במשחק
+      // 1. איסוף כל מספרי הטלפון של השחקנים שנרשמו למשחק הנוכחי
       const { data: dbPlayers } = await supabase
         .from('game_players')
         .select('phone')
@@ -325,38 +337,42 @@ export default function HostGamePage({
       const phones =
         dbPlayers?.map((p) => String(p.phone)).filter(Boolean) || [];
 
-      // ב. עדכון IVR לסטטוס FINISHED - מורה למרכזייה להשמיע הודעת סיום ולנתק את השיחה
+      // 2. עדכון ivr_sessions ל-FINISHED כדי לשלוח פקודת ניתוק קולית
       await supabase
         .from('ivr_sessions')
         .update({ status: 'FINISHED' })
-        .or(
-          `pin.eq.${pinStr}${
-            phones.length > 0 ? `,phone.in.(${phones.join(',')})` : ''
-          }`
-        );
+        .eq('pin', pinStr);
 
-      // ג. שידור מניעת פעולות לקוח באתר
+      if (phones.length > 0) {
+        await supabase
+          .from('ivr_sessions')
+          .update({ status: 'FINISHED' })
+          .in('phone', phones);
+      }
+
+      // 3. שידור GAME_OVER בזמן אמת לשחקני ה-Web
       channelRef.current?.send({
         type: 'broadcast',
         event: 'GAME_OVER',
         payload: {},
       });
 
-      // ד. השהיה קצרה של 1.5 שניות שמאפשרת למערכת הקולית לקבל את הודעת הניתוק
+      // 4. השהיה של 1.5 שניות המאפשרת למרכזיה לקבל את פקודת הניתוק
       await new Promise((res) => setTimeout(res, 1500));
 
-      // ה. מחיקת כל הנתונים מ-3 הטבלאות
-      await Promise.all([
-        supabase.from('game_answers').delete().eq('game_pin', pinStr),
-        supabase.from('game_players').delete().eq('game_pin', pinStr),
-        supabase.from('ivr_sessions').delete().eq('pin', pinStr),
-      ]);
+      // 5. מחיקה מוחלטת מכל טבלאות ה-DB לפי PIN ולפי טלפונים
+      await supabase.from('game_answers').delete().eq('game_pin', pinStr);
+      await supabase.from('game_players').delete().eq('game_pin', pinStr);
+      await supabase.from('ivr_sessions').delete().eq('pin', pinStr);
 
       if (phones.length > 0) {
+        await supabase.from('game_players').delete().in('phone', phones);
         await supabase.from('ivr_sessions').delete().in('phone', phones);
       }
+
+      console.log('סיום משחק וניקוי נתונים הושלם בהצלחה.');
     } catch (err) {
-      console.error('שגיאה בתהליך הניתוק והניקוי:', err);
+      console.error('שגיאה בתהליך סיום המשחק והניקוי:', err);
     }
   };
 
@@ -377,6 +393,7 @@ export default function HostGamePage({
   }
 
   const currentQ = questions[currentQuestionIndex];
+  const currentOptions = currentQ ? getParsedOptions(currentQ.options) : [];
   const sortedPlayers = [...players].sort((a, b) => b.score - a.score);
 
   return (
@@ -384,7 +401,7 @@ export default function HostGamePage({
       <header className="flex items-center justify-between border-b border-white/10 pb-4">
         <div>
           <h1 className="text-2xl font-black text-fuchsia-300">
-            {quizTitle || 'טוען שאלון...'}
+            {quizTitle || 'שאלון ללא שם'}
           </h1>
           <p className="text-xs text-white/50">מנחה המשחק</p>
         </div>
@@ -471,7 +488,7 @@ export default function HostGamePage({
           </h2>
 
           <div className="grid grid-cols-2 gap-4">
-            {currentQ.options.map((opt, i) => (
+            {currentOptions.map((opt, i) => (
               <div
                 key={i}
                 className="glass p-6 rounded-2xl font-bold text-xl border border-white/10 flex items-center gap-4"
@@ -491,7 +508,7 @@ export default function HostGamePage({
         <div className="max-w-4xl mx-auto w-full text-center py-10">
           <h2 className="text-4xl font-black mb-8">התשובה הנכונה היא:</h2>
           <div className="glass p-8 rounded-3xl border-2 border-emerald-500 bg-emerald-500/10 text-3xl font-black text-emerald-300 mb-10">
-            {currentQ.options[currentQ.correct_option]}
+            {currentOptions[currentQ.correct_option] || 'תשובה לא מוגדרת'}
           </div>
           <button
             onClick={showLeaderboard}
