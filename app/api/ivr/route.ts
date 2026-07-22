@@ -11,6 +11,7 @@ export async function POST(req: Request) {
 }
 
 function cleanPhone(p: string): string {
+  if (!p) return "";
   let cleaned = p.replace(/\D/g, "");
   if (cleaned.startsWith("972")) {
     cleaned = "0" + cleaned.slice(3);
@@ -19,43 +20,48 @@ function cleanPhone(p: string): string {
 }
 
 async function handleRequest(req: Request) {
+  // מעטפת הגנה - מונעת שגיאות 500 שמפילות את ימות המשיח
   try {
-    const { searchParams } = new URL(req.url);
-    
-    // קבלת פרטים מימות המשיח
+    const url = new URL(req.url);
+
     const rawPhone =
-      searchParams.get("ApiPhone") ||
-      searchParams.get("phone") ||
-      searchParams.get("ApiDID") ||
+      url.searchParams.get("ApiPhone") ||
+      url.searchParams.get("phone") ||
+      url.searchParams.get("ApiDID") ||
       "";
     const phone = cleanPhone(rawPhone);
 
-    // קבלת ערכים שנרשמו בקלט
     const inputPin = String(
-      searchParams.get("q_pin") || searchParams.get("val_name_q_pin") || ""
+      url.searchParams.get("q_pin") || url.searchParams.get("val_name_q_pin") || ""
     ).trim();
     const inputAns = String(
-      searchParams.get("q_ans") || searchParams.get("val_name_q_ans") || ""
+      url.searchParams.get("q_ans") || url.searchParams.get("val_name_q_ans") || ""
     ).trim();
     const inputRange = String(
-      searchParams.get("q_range") || searchParams.get("val_name_q_range") || ""
+      url.searchParams.get("q_range") || url.searchParams.get("val_name_q_range") || ""
     ).trim();
 
-    // 1. אם אין זיהוי שיחה
+    // 1. קילוף ראשוני - אם אין טלפון
     if (!phone) {
       return makeIvrRead("ברוכים הבאים. נא להקיש את קוד המשחק בן 6 הספרות", "q_pin", 6, 6);
     }
 
-    // 2. בדיקת סשן פעיל
-    const { data: session } = await supabase
-      .from("ivr_sessions")
-      .select("pin, status")
-      .eq("phone", phone)
-      .maybeSingle();
+    // 2. שליפת סשן באופן בטוח
+    let session = null;
+    try {
+      const { data } = await supabase
+        .from("ivr_sessions")
+        .select("pin, status")
+        .eq("phone", phone)
+        .maybeSingle();
+      session = data;
+    } catch (e) {
+      console.error("Supabase Session Fetch Error:", e);
+    }
 
     const activePin = session?.pin ? String(session.pin) : null;
 
-    // === מקרה א': הקשת קוד משחק בכניסה ===
+    // 3. הרשמה / התחברות למשחק
     if ((inputPin && inputPin !== activePin) || (!activePin && inputPin)) {
       if (!/^\d{6}$/.test(inputPin)) {
         return makeIvrRead("קוד שגוי. נא להקיש קוד בן 6 ספרות", "q_pin", 6, 6);
@@ -71,7 +77,6 @@ async function handleRequest(req: Request) {
         return makeIvrRead("המשחק לא קיים או שהסתיים. נא להקיש קוד אחר", "q_pin", 6, 6);
       }
 
-      // שמירת סשן
       await supabase.from("ivr_sessions").upsert(
         { phone, pin: inputPin, status: "ACTIVE", updated_at: new Date().toISOString() },
         { onConflict: "phone" }
@@ -88,7 +93,7 @@ async function handleRequest(req: Request) {
       return makeIvrWait("התחברת בהצלחה. ממתין להתחלת המשחק");
     }
 
-    // === מקרה ב': משתמש כבר מחובר (תוך כדי משחק) ===
+    // 4. ניהול שיחה למשתמש מחובר
     if (activePin) {
       const { data: gameData } = await supabase
         .from("games")
@@ -129,7 +134,6 @@ async function handleRequest(req: Request) {
 
       const submittedAnswer = qType === "range" ? inputRange : inputAns;
 
-      // קליטת תשובה
       if (submittedAnswer && !existingAnswer) {
         const answerTime = new Date();
         let timeBonus = 1000;
@@ -186,7 +190,6 @@ async function handleRequest(req: Request) {
         return makeIvrWait("ממתין לשאלה הבאה");
       }
 
-      // השמעת שאלה
       if (qType === "range") {
         return makeIvrRead("שאלת טווח. הקש מספר וסיום בסולמית", "q_range", digitsMin, digitsMax, timeLimit);
       } else {
@@ -197,15 +200,13 @@ async function handleRequest(req: Request) {
     return makeIvrRead("ברוכים הבאים. נא להקיש את קוד המשחק", "q_pin", 6, 6);
 
   } catch (err) {
-    console.error("IVR Error:", err);
-    return makeIvrWait("אנא המתן למערכת");
+    console.error("IVR System Error:", err);
+    // מענה גיבוי - תמיד מחזיר תגובה תקינה שאינה מפילה את ימות המשיח
+    return makeIvrRead("אירעה שגיאה תקשורת. נא להקיש את קוד המשחק שנית", "q_pin", 6, 6);
   }
 }
 
-// --- פונקציות עזר לבניית תגובה תקנית לימות המשיח ---
-
 function makeIvrRead(text: string, valName: string, minDigits = 1, maxDigits = 1, timeout = 10) {
-  // הפורמט הבטוח של read המפנה חזרה ל-API בתום הקלט
   const responseText = `read=t-${text}=${valName},no,${minDigits},${maxDigits},${timeout},Digits,no,no,`;
   return new Response(responseText, {
     status: 200,
@@ -217,7 +218,6 @@ function makeIvrRead(text: string, valName: string, minDigits = 1, maxDigits = 1
 }
 
 function makeIvrWait(text: string) {
-  // לולאת המתנה בטוחה של 2 שניות שאינה מנתקת
   const responseText = `read=t-${text}=q_wait,no,1,1,2,Digits,no,no,`;
   return new Response(responseText, {
     status: 200,
