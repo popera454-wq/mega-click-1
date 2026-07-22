@@ -19,6 +19,10 @@ function cleanPhone(p: string): string {
   return cleaned;
 }
 
+function sanitizeText(t: string): string {
+  return t.replace(/[.,]/g, "").trim();
+}
+
 async function handleRequest(req: Request) {
   try {
     const url = new URL(req.url);
@@ -48,9 +52,9 @@ async function handleRequest(req: Request) {
 
     for (const [key, value] of searchParams.entries()) {
       const k = key.toLowerCase();
-      if (k.includes("q_pin") || k.includes("pin")) inputPin = value;
-      if (k.includes("q_ans") || k.includes("ans")) inputAns = value;
-      if (k.includes("q_range") || k.includes("range")) inputRange = value;
+      if (k.includes("q_pin")) inputPin = value;
+      if (k.includes("q_ans")) inputAns = value;
+      if (k.includes("q_range")) inputRange = value;
     }
 
     inputPin = inputPin.trim();
@@ -65,9 +69,10 @@ async function handleRequest(req: Request) {
 
     const activePin = session?.pin ? String(session.pin) : null;
 
+    // --- שלב הזנת קוד משחק ---
     if ((inputPin && inputPin !== activePin) || (!activePin && inputPin)) {
       if (!/^\d{6}$/.test(inputPin)) {
-        return makeIvrRead("קוד שגוי. נא להקיש קוד בן 6 ספרות", "q_pin", 6, 6);
+        return makeIvrRead("קוד שגוי נא להקיש קוד בן 6 ספרות", "q_pin", 6, 6);
       }
 
       const { data: game } = await supabase
@@ -77,7 +82,7 @@ async function handleRequest(req: Request) {
         .maybeSingle();
 
       if (!game || String(game.status).toLowerCase() === "finished") {
-        return makeIvrRead("המשחק לא קיים או שהסתיים. נא להקיש קוד אחר", "q_pin", 6, 6);
+        return makeIvrRead("המשחק לא קיים או הסתיים נא להקיש קוד אחר", "q_pin", 6, 6);
       }
 
       await supabase.from("ivr_sessions").upsert(
@@ -93,9 +98,10 @@ async function handleRequest(req: Request) {
         score: 0,
       });
 
-      return makeIvrWait("התחברת בהצלחה. ממתין להתחלת המשחק");
+      return makeIvrWait("התחברת בהצלחה ממתין להתחלת המשחק");
     }
 
+    // --- שחקן כבר מחובר ---
     if (activePin) {
       const { data: gameData } = await supabase
         .from("games")
@@ -105,7 +111,7 @@ async function handleRequest(req: Request) {
 
       if (!gameData || String(gameData.status).toLowerCase() === "finished") {
         await supabase.from("ivr_sessions").delete().eq("phone", phone);
-        return makeIvrWait("המשחק הסתיים. תודה רבה");
+        return makeIvrWait("המשחק הסתיים תודה רבה");
       }
 
       if (String(gameData.status).toLowerCase() === "waiting") {
@@ -135,6 +141,7 @@ async function handleRequest(req: Request) {
 
       const submittedAnswer = qType === "range" ? inputRange : inputAns;
 
+      // --- קבלת תשובה ---
       if (submittedAnswer && !existingAnswer) {
         const answerTime = new Date();
         let timeBonus = 1000;
@@ -194,7 +201,7 @@ async function handleRequest(req: Request) {
             .eq("phone", phone);
         }
 
-        return makeIvrWait("התשובה נקלטה. המתן לשאלה הבאה");
+        return makeIvrWait("התשובה נקלטה המתן לשאלה הבאה");
       }
 
       if (existingAnswer) {
@@ -202,13 +209,13 @@ async function handleRequest(req: Request) {
       }
 
       if (qType === "range") {
-        return makeIvrRead("שאלת טווח. הקש מספר וסיום בסולמית", "q_range", 1, 6, timeLimit);
+        return makeIvrRead("שאלת טווח הקש מספר וסיום בסולמית", "q_range", 1, 6, timeLimit);
       } else {
         return makeIvrRead("הקש את מספר התשובה", "q_ans", 1, 1, timeLimit);
       }
     }
 
-    return makeIvrRead("ברוכים הבאים. נא להקיש את קוד המשחק בן 6 הספרות", "q_pin", 6, 6);
+    return makeIvrRead("ברוכים הבאים נא להקיש את קוד המשחק בן 6 ספרות", "q_pin", 6, 6);
 
   } catch (err) {
     console.error("IVR System Error:", err);
@@ -220,14 +227,16 @@ async function handleRequest(req: Request) {
 }
 
 function makeIvrRead(text: string, valName: string, minDigits = 1, maxDigits = 1, timeout = 10) {
-  return new Response(`read=t-${text}=${valName},no,${minDigits},${maxDigits},${timeout},Digits,no,no`, {
+  const clean = sanitizeText(text);
+  return new Response(`read=t-${clean}=${valName},no,${minDigits},${maxDigits},${timeout},Digits,no,no`, {
     status: 200,
     headers: { "Content-Type": "text/plain; charset=utf-8" },
   });
 }
 
 function makeIvrWait(text: string) {
-  return new Response(`read=t-${text}=q_wait,no,1,1,2,Digits,no,no`, {
+  const clean = sanitizeText(text);
+  return new Response(`read=t-${clean}=q_wait,no,1,1,2,Digits,no,no`, {
     status: 200,
     headers: { "Content-Type": "text/plain; charset=utf-8" },
   });
