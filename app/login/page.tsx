@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { createClient } from '@supabase/supabase-js';
@@ -20,6 +20,30 @@ export default function LoginPage() {
   const [loading, setLoading] = useState(false);
 
   const router = useRouter();
+
+  // Handle Google / Hash tokens redirect automatically on load
+  useEffect(() => {
+    // Check if user is already logged in or if tokens exist in URL hash
+    const handleAuthRedirect = async () => {
+      const { data: { session } } = await supabase.auth.getSession();
+      if (session) {
+        router.push('/dashboard');
+      }
+    };
+
+    handleAuthRedirect();
+
+    // Listen to auth state changes (e.g. when OAuth tokens are processed from URL hash)
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((event, session) => {
+      if (session && (event === 'SIGNED_IN' || event === 'TOKEN_REFRESHED')) {
+        router.push('/dashboard');
+      }
+    });
+
+    return () => {
+      subscription.unsubscribe();
+    };
+  }, [router]);
 
   // Handle Email/Password Login or Sign Up
   const handleAuth = async (e: React.FormEvent) => {
@@ -76,7 +100,7 @@ export default function LoginPage() {
     const { error } = await supabase.auth.signInWithOAuth({
       provider: 'google',
       options: {
-        redirectTo: `${window.location.origin}/dashboard`,
+        redirectTo: `${window.location.origin}/login`,
       },
     });
     if (error) {
