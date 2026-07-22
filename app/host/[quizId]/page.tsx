@@ -1,9 +1,10 @@
 'use client';
 
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useCallback, use } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { supabase } from '@/lib/supabase';
+import { RealtimeChannel } from '@supabase/supabase-js';
 
 interface Question {
   id: string;
@@ -31,9 +32,9 @@ type GameState =
 export default function HostGamePage({
   params,
 }: {
-  params: { quizId: string };
+  params: Promise<{ quizId: string }>;
 }) {
-  const quizId = params.quizId;
+  const { quizId } = use(params);
   const router = useRouter();
 
   const [pinCode] = useState(() =>
@@ -50,40 +51,56 @@ export default function HostGamePage({
   const [answersCount, setAnswersCount] = useState(0);
   const [loading, setLoading] = useState(true);
 
-  const channelRef = useRef<any>(null);
-  const timerRef = useRef<any>(null);
+  const channelRef = useRef<RealtimeChannel | null>(null);
+  const timerRef = useRef<NodeJS.Timeout | null>(null);
 
-  // 1. טעינת נתונים
+  // 1. טעינת נתונים ראשונית של השאלון והשאלות
   useEffect(() => {
     const initHost = async () => {
-      const { data: { user } } = await supabase.auth.getUser();
-      if (!user) {
-        router.push('/login');
-        return;
+      try {
+        const {
+          data: { user },
+        } = await supabase.auth.getUser();
+
+        if (!user) {
+          router.push('/login');
+          return;
+        }
+
+        const { data: quizData, error: quizError } = await supabase
+          .from('quizzes')
+          .select('title')
+          .eq('id', quizId)
+          .single();
+
+        if (quizError) {
+          console.error('שגיאה בטעינת השאלון:', quizError);
+        }
+
+        const { data: qData, error: qError } = await supabase
+          .from('questions')
+          .select('*')
+          .eq('quiz_id', quizId)
+          .order('created_at', { ascending: true });
+
+        if (qError) {
+          console.error('שגיאה בטעינת השאלות:', qError);
+        }
+
+        if (quizData) setQuizTitle(quizData.title);
+        if (qData && qData.length > 0) setQuestions(qData);
+      } catch (err) {
+        console.error('שגיאה כללית בטעינת הנתונים:', err);
+      } finally {
+        setLoading(false);
       }
-
-      const { data: quizData } = await supabase
-        .from('quizzes')
-        .select('title')
-        .eq('id', quizId)
-        .single();
-      const { data: qData } = await supabase
-        .from('questions')
-        .select('*')
-        .eq('quiz_id', quizId)
-        .order('created_at', { ascending: true });
-
-      if (quizData) setQuizTitle(quizData.title);
-      if (qData && qData.length > 0) setQuestions(qData);
-
-      setLoading(false);
     };
 
     initHost();
   }, [quizId, router]);
 
   // 2. טעינת שחקנים מ-game_players
-  const fetchDbPlayers = async () => {
+  const fetchDbPlayers = useCallback(async () => {
     const { data, error } = await supabase
       .from('game_players')
       .select('*')
@@ -98,7 +115,9 @@ export default function HostGamePage({
       setPlayers((prev) => {
         return data.map((dbP) => {
           const playerPhone = String(dbP.phone || dbP.id);
-          const existing = prev.find((p) => p.phone === playerPhone || p.id === dbP.id);
+          const existing = prev.find(
+            (p) => p.phone === playerPhone || p.id === dbP.id
+          );
           return {
             id: dbP.id || playerPhone,
             phone: playerPhone,
@@ -109,26 +128,86 @@ export default function HostGamePage({
         });
       });
     }
-  };
+  }, [pinCode]);
 
-  // 3. סריקה אקטיבית של תשובות ב-DB
-  const checkPhoneAnswers = async () => {
+  // 3. חישוב ניקוד אחיד
+  const handleAnswerSubmitted = useCallback(
+    (identifier: string, answerIndex: number, timeTaken: number) => {
+      const currentQ = questions[currentQuestionIndex];
+      if (!currentQ) return;
+
+      const cleanId = identifier.replace(/\D/g, '');
+
+      setPlayers((prevPlayers) => {
+        let isNewAnswer = false;
+
+        const updated = prevPlayers.map((p) => {
+          const cleanPlayerPhone = p.phone.replace(/\D/g, '');
+
+          const match =
+            p.id === identifier ||
+            p.phone === identifier ||
+            (cleanId.length > 3 &&
+              cleanPlayerPhone.length > 3 &&
+              (cleanId.endsWith(cleanPlayerPhone) ||
+                cleanPlayerPhone.endsWith(cleanId)));
+
+          if (match) {
+            if (p.lastAnswerIndex !== undefined) return p;
+
+            isNewAnswer = true;
+            const isCorrect = answerIndex === currentQ.correct_option;
+            const bonus = isCorrect
+              ? Math.max(
+                  200,
+                  Math.round(
+                    1000 * (1 - timeTaken / (currentQ.time_limit || 20))
+                  )
+                )
+              : 0;
+
+            return {
+              ...p,
+              score: p.score + bonus,
+              lastAnswerIndex: answerIndex,
+            };
+          }
+          return p;
+        });
+
+        if (isNewAnswer) {
+          setAnswersCount((prev) => prev + 1);
+        }
+
+        return updated;
+      });
+    },
+    [questions, currentQuestionIndex]
+  );
+
+  // 4. סריקה אקטיבית של תשובות ב-DB
+  const checkPhoneAnswers = useCallback(async () => {
     if (gameState !== 'QUESTION') return;
 
-    const { data } = await supabase
+    const { data, error } = await supabase
       .from('game_answers')
       .select('*')
       .eq('game_pin', String(pinCode))
       .eq('question_index', currentQuestionIndex);
+
+    if (error) {
+      console.error('שגיאה בטעינת תשובות:', error);
+      return;
+    }
 
     if (data && data.length > 0) {
       data.forEach((ans) => {
         handleAnswerSubmitted(String(ans.phone), ans.answer_index, 5);
       });
     }
-  };
+  }, [gameState, pinCode, currentQuestionIndex, handleAnswerSubmitted]);
 
-  // 4. סנכרון תקופתי וחיבור Realtime
+  // 5. סנכרון תקופתי וחיבור Realtime
   useEffect(() => {
     if (loading) return;
 
@@ -145,7 +224,11 @@ export default function HostGamePage({
     const channel = supabase.channel(`game_${pinCode}`);
 
     channel.on('broadcast', { event: 'SUBMIT_ANSWER' }, ({ payload }) => {
-      handleAnswerSubmitted(String(payload.playerId), payload.answerIndex, payload.timeTaken);
+      handleAnswerSubmitted(
+        String(payload.playerId),
+        payload.answerIndex,
+        payload.timeTaken
+      );
     });
 
     channel.subscribe();
@@ -155,55 +238,16 @@ export default function HostGamePage({
       clearInterval(interval);
       supabase.removeChannel(channel);
     };
-  }, [pinCode, loading, gameState, currentQuestionIndex]);
+  }, [
+    pinCode,
+    loading,
+    gameState,
+    fetchDbPlayers,
+    checkPhoneAnswers,
+    handleAnswerSubmitted,
+  ]);
 
-  // 5. חישוב ניקוד אחיד
-  const handleAnswerSubmitted = (identifier: string, answerIndex: number, timeTaken: number) => {
-    const currentQ = questions[currentQuestionIndex];
-    if (!currentQ) return;
-
-    const cleanId = identifier.replace(/\D/g, '');
-
-    setPlayers((prevPlayers) => {
-      let isNewAnswer = false;
-
-      const updated = prevPlayers.map((p) => {
-        const cleanPlayerPhone = p.phone.replace(/\D/g, '');
-
-        const match =
-          p.id === identifier ||
-          p.phone === identifier ||
-          (cleanId.length > 3 && cleanPlayerPhone.length > 3 && (
-            cleanId.endsWith(cleanPlayerPhone) || cleanPlayerPhone.endsWith(cleanId)
-          ));
-
-        if (match) {
-          if (p.lastAnswerIndex !== undefined) return p;
-
-          isNewAnswer = true;
-          const isCorrect = answerIndex === currentQ.correct_option;
-          const bonus = isCorrect
-            ? Math.max(200, Math.round(1000 * (1 - timeTaken / (currentQ.time_limit || 20))))
-            : 0;
-
-          return {
-            ...p,
-            score: p.score + bonus,
-            lastAnswerIndex: answerIndex,
-          };
-        }
-        return p;
-      });
-
-      if (isNewAnswer) {
-        setAnswersCount((prev) => prev + 1);
-      }
-
-      return updated;
-    });
-  };
-
-  // מנגנון הטיימר
+  // מנגנון הטיימר לשאלה הנוכחית
   useEffect(() => {
     if (gameState === 'QUESTION' && timeLeft > 0) {
       timerRef.current = setInterval(() => {
@@ -213,7 +257,9 @@ export default function HostGamePage({
       endQuestion();
     }
 
-    return () => clearInterval(timerRef.current);
+    return () => {
+      if (timerRef.current) clearInterval(timerRef.current);
+    };
   }, [gameState, timeLeft]);
 
   const startGame = () => {
@@ -225,12 +271,16 @@ export default function HostGamePage({
   };
 
   const startQuestion = (index: number) => {
+    if (!questions[index]) return;
+
     setCurrentQuestionIndex(index);
     setAnswersCount(0);
     setTimeLeft(questions[index].time_limit || 20);
     setGameState('QUESTION');
 
-    setPlayers((prev) => prev.map((p) => ({ ...p, lastAnswerIndex: undefined })));
+    setPlayers((prev) =>
+      prev.map((p) => ({ ...p, lastAnswerIndex: undefined }))
+    );
 
     channelRef.current?.send({
       type: 'broadcast',
@@ -245,10 +295,11 @@ export default function HostGamePage({
   };
 
   const endQuestion = () => {
-    clearInterval(timerRef.current);
+    if (timerRef.current) clearInterval(timerRef.current);
     setGameState('SHOW_RESULT');
 
     const currentQ = questions[currentQuestionIndex];
+    if (!currentQ) return;
 
     channelRef.current?.send({
       type: 'broadcast',
@@ -259,7 +310,7 @@ export default function HostGamePage({
 
   const showLeaderboard = () => setGameState('LEADERBOARD');
 
-  // 🧹 1. ניתוק שיחות IVR + 2. מחיקת נתונים מכל 3 הטבלאות
+  // ניתוק שיחות IVR ומחיקת נתונים מכל הטבלאות
   const finishGameCleanup = async () => {
     setGameState('GAME_OVER');
     const pinStr = String(pinCode);
@@ -271,13 +322,18 @@ export default function HostGamePage({
         .select('phone')
         .eq('game_pin', pinStr);
 
-      const phones = dbPlayers?.map((p) => String(p.phone)).filter(Boolean) || [];
+      const phones =
+        dbPlayers?.map((p) => String(p.phone)).filter(Boolean) || [];
 
-      // ב. עדכון IVR לסטטוס FINISHED - מורה למרכזייה להשמיע הודעת סיום ולנתק את השיחה!
+      // ב. עדכון IVR לסטטוס FINISHED - מורה למרכזייה להשמיע הודעת סיום ולנתק את השיחה
       await supabase
         .from('ivr_sessions')
         .update({ status: 'FINISHED' })
-        .or(`pin.eq.${pinStr}${phones.length > 0 ? `,phone.in.(${phones.join(',')})` : ''}`);
+        .or(
+          `pin.eq.${pinStr}${
+            phones.length > 0 ? `,phone.in.(${phones.join(',')})` : ''
+          }`
+        );
 
       // ג. שידור מניעת פעולות לקוח באתר
       channelRef.current?.send({
@@ -327,7 +383,9 @@ export default function HostGamePage({
     <main className="min-h-screen bg-[#0d041e] text-white dir-rtl flex flex-col justify-between p-6 md:p-10 select-none">
       <header className="flex items-center justify-between border-b border-white/10 pb-4">
         <div>
-          <h1 className="text-2xl font-black text-fuchsia-300">{quizTitle}</h1>
+          <h1 className="text-2xl font-black text-fuchsia-300">
+            {quizTitle || 'טוען שאלון...'}
+          </h1>
           <p className="text-xs text-white/50">מנחה המשחק</p>
         </div>
 
@@ -338,7 +396,10 @@ export default function HostGamePage({
               {pinCode}
             </span>
           </div>
-          <Link href="/dashboard" className="text-xs text-white/40 hover:text-white">
+          <Link
+            href="/dashboard"
+            className="text-xs text-white/40 hover:text-white"
+          >
             יציאה
           </Link>
         </div>
@@ -377,7 +438,7 @@ export default function HostGamePage({
             </span>
             <button
               onClick={startGame}
-              className="px-10 py-4 rounded-2xl font-black text-xl bg-gradient-to-r from-fuchsia-500 to-violet-600 hover:from-fuchsia-400 hover:to-violet-500 shadow-xl transition-all"
+              className="px-10 py-4 rounded-2xl font-black text-xl bg-gradient-to-r from-fuchsia-500 to-violet-600 hover:from-fuchsia-400 hover:to-violet-500 shadow-xl transition-all cursor-pointer"
             >
               התחל משחק 🚀
             </button>
@@ -434,7 +495,7 @@ export default function HostGamePage({
           </div>
           <button
             onClick={showLeaderboard}
-            className="px-10 py-4 rounded-2xl font-black text-xl bg-gradient-to-r from-fuchsia-500 to-violet-600 hover:from-fuchsia-400 hover:to-violet-500 shadow-xl transition-all"
+            className="px-10 py-4 rounded-2xl font-black text-xl bg-gradient-to-r from-fuchsia-500 to-violet-600 hover:from-fuchsia-400 hover:to-violet-500 shadow-xl transition-all cursor-pointer"
           >
             הצג טבלת מובילים 🏆
           </button>
@@ -444,7 +505,9 @@ export default function HostGamePage({
       {/* LEADERBOARD */}
       {gameState === 'LEADERBOARD' && (
         <div className="max-w-3xl mx-auto w-full py-6">
-          <h2 className="text-4xl font-black text-center mb-8">טבלת מובילים 🏆</h2>
+          <h2 className="text-4xl font-black text-center mb-8">
+            טבלת מובילים 🏆
+          </h2>
           <div className="space-y-3 mb-10">
             {sortedPlayers.slice(0, 5).map((p, rank) => (
               <div
@@ -464,9 +527,11 @@ export default function HostGamePage({
           <div className="text-center">
             <button
               onClick={nextQuestion}
-              className="px-10 py-4 rounded-2xl font-black text-xl bg-gradient-to-r from-fuchsia-500 to-violet-600 hover:from-fuchsia-400 hover:to-violet-500 shadow-xl transition-all"
+              className="px-10 py-4 rounded-2xl font-black text-xl bg-gradient-to-r from-fuchsia-500 to-violet-600 hover:from-fuchsia-400 hover:to-violet-500 shadow-xl transition-all cursor-pointer"
             >
-              {currentQuestionIndex + 1 < questions.length ? 'לשאלה הבאה ➔' : 'לסיום המשחק 🎉'}
+              {currentQuestionIndex + 1 < questions.length
+                ? 'לשאלה הבאה ➔'
+                : 'לסיום המשחק 🎉'}
             </button>
           </div>
         </div>
@@ -489,7 +554,7 @@ export default function HostGamePage({
           )}
           <Link
             href="/dashboard"
-            className="inline-block px-10 py-4 rounded-2xl font-black text-xl bg-white/10 hover:bg-white/20 border border-white/20"
+            className="inline-block px-10 py-4 rounded-2xl font-black text-xl bg-white/10 hover:bg-white/20 border border-white/20 transition-colors"
           >
             חזרה לדשבורד
           </Link>
