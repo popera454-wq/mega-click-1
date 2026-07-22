@@ -15,7 +15,10 @@ type PlayerStep =
 interface QuestionData {
   questionIndex: number;
   questionText: string;
+  questionType: 'single_choice' | 'multiple_correct' | 'true_false' | 'poll' | 'range';
   options: string[];
+  minRange?: number | null;
+  maxRange?: number | null;
   timeLimit: number;
 }
 
@@ -30,6 +33,7 @@ export default function PlayPage() {
   );
   const [currentQuestion, setCurrentQuestion] = useState<QuestionData | null>(null);
   const [selectedIndex, setSelectedIndex] = useState<number | null>(null);
+  const [rangeInputVal, setRangeInputVal] = useState<string>('');
   const [correctOption, setCorrectOption] = useState<number | null>(null);
   const [startTime, setStartTime] = useState<number>(0);
 
@@ -77,6 +81,7 @@ export default function PlayPage() {
     channel.on('broadcast', { event: 'QUESTION_START' }, ({ payload }) => {
       setCurrentQuestion(payload);
       setSelectedIndex(null);
+      setRangeInputVal('');
       setCorrectOption(null);
       setStartTime(Date.now());
       setStep('QUESTION');
@@ -103,18 +108,27 @@ export default function PlayPage() {
     channelRef.current = channel;
   };
 
-  const submitAnswer = async (optionIndex: number) => {
+  const submitAnswer = async (optionIndex: number, answerVal?: string | number) => {
     if (selectedIndex !== null || !currentQuestion) return;
 
     const timeTaken = (Date.now() - startTime) / 1000;
+    const isRange = currentQuestion.questionType === 'range';
+    const subVal = isRange ? Number(answerVal) : optionIndex;
+
+    if (isRange && (isNaN(Number(answerVal)) || answerVal === '')) {
+      alert('נא להזין מספר תקין');
+      return;
+    }
+
     setSelectedIndex(optionIndex);
     setStep('ANSWERED');
 
-    // שמירת תשובת האתר ב-DB
+    // שמירת תשובת האתר ב-DB (תמיכה גם ב-answer_value לטווחים)
     await supabase.from('game_answers').insert({
       game_pin: pin,
       phone: playerId,
-      answer_index: optionIndex,
+      answer_index: isRange ? null : optionIndex,
+      answer_value: isRange ? String(answerVal) : null,
       question_index: currentQuestion.questionIndex,
     });
 
@@ -124,7 +138,8 @@ export default function PlayPage() {
       event: 'SUBMIT_ANSWER',
       payload: {
         playerId,
-        answerIndex: optionIndex,
+        answerIndex: isRange ? undefined : optionIndex,
+        answerValue: isRange ? answerVal : undefined,
         timeTaken,
       },
     });
@@ -232,40 +247,76 @@ export default function PlayPage() {
         </div>
       )}
 
-      {/* מסך הצגת שאלה ואפשרויות תשובה */}
+      {/* מסך הצגת שאלה ואפשרויות / טווח מספרים */}
       {step === 'QUESTION' && currentQuestion && (
         <div className="w-full max-w-lg space-y-6 z-10 animate-scale-up">
           <div className="bg-[#130728]/90 backdrop-blur-2xl p-6 rounded-3xl border border-white/15 text-center shadow-2xl">
-            <span className="inline-block px-3 py-1 rounded-full bg-fuchsia-500/20 border border-fuchsia-500/30 text-fuchsia-300 font-extrabold text-xs mb-3">
-              שאלה {currentQuestion.questionIndex + 1}
-            </span>
+            <div className="flex items-center justify-center gap-2 mb-3">
+              <span className="inline-block px-3 py-1 rounded-full bg-fuchsia-500/20 border border-fuchsia-500/30 text-fuchsia-300 font-extrabold text-xs">
+                שאלה {currentQuestion.questionIndex + 1}
+              </span>
+              {currentQuestion.questionType === 'poll' && (
+                <span className="inline-block px-3 py-1 rounded-full bg-blue-500/20 border border-blue-500/30 text-blue-300 font-extrabold text-xs">
+                  סקר
+                </span>
+              )}
+              {currentQuestion.questionType === 'range' && (
+                <span className="inline-block px-3 py-1 rounded-full bg-fuchsia-500/20 border border-fuchsia-500/30 text-fuchsia-300 font-extrabold text-xs">
+                  שאלת טווח
+                </span>
+              )}
+            </div>
+
             <h2 className="text-2xl font-black leading-snug text-white">
               {currentQuestion.questionText}
             </h2>
           </div>
 
-          <div className="grid grid-cols-1 gap-3.5">
-            {currentQuestion.options.map((opt, i) => {
-              const colors = [
-                'from-rose-600 to-red-700 hover:from-rose-500 hover:to-red-600 border-red-500/40 shadow-red-500/20',
-                'from-blue-600 to-indigo-700 hover:from-blue-500 hover:to-indigo-600 border-blue-500/40 shadow-blue-500/20',
-                'from-amber-500 to-orange-600 hover:from-amber-400 hover:to-orange-500 border-orange-500/40 shadow-orange-500/20',
-                'from-emerald-600 to-teal-700 hover:from-emerald-500 hover:to-teal-600 border-emerald-500/40 shadow-emerald-500/20',
-              ];
-              return (
-                <button
-                  key={i}
-                  onClick={() => submitAnswer(i)}
-                  className={`w-full p-5 rounded-2xl bg-gradient-to-r ${colors[i % 4]} border-2 text-white font-black text-xl shadow-lg flex items-center justify-between active:scale-95 transition-all cursor-pointer`}
-                >
-                  <span className="truncate">{opt}</span>
-                  <span className="w-9 h-9 rounded-xl bg-white/20 flex items-center justify-center text-sm font-black shrink-0">
-                    {i + 1}
-                  </span>
-                </button>
-              );
-            })}
-          </div>
+          {/* אם זו שאלת טווח - הצג שדה הקלדת מספר */}
+          {currentQuestion.questionType === 'range' ? (
+            <div className="bg-[#130728]/90 backdrop-blur-2xl p-6 rounded-3xl border border-white/15 text-center shadow-2xl space-y-4">
+              <p className="text-xs text-white/60 font-medium">
+                טווח מספרים מותר: <strong className="text-fuchsia-300">{currentQuestion.minRange}</strong> עד <strong className="text-fuchsia-300">{currentQuestion.maxRange}</strong>
+              </p>
+              <input
+                type="number"
+                placeholder="הקלד מספר..."
+                value={rangeInputVal}
+                onChange={(e) => setRangeInputVal(e.target.value)}
+                className="w-full text-center text-3xl font-black py-4 rounded-2xl bg-white/5 border border-white/20 focus:border-fuchsia-500 focus:ring-2 focus:ring-fuchsia-500/30 outline-none text-fuchsia-200 placeholder-white/20"
+              />
+              <button
+                onClick={() => submitAnswer(0, rangeInputVal)}
+                className="w-full py-4 rounded-2xl font-black text-xl bg-gradient-to-r from-fuchsia-500 via-pink-500 to-violet-600 hover:scale-[1.02] active:scale-95 shadow-xl shadow-fuchsia-500/30 transition-all cursor-pointer"
+              >
+                שלח תשובה 🚀
+              </button>
+            </div>
+          ) : (
+            /* שאלות רגילות / סקר בררה רגיל */
+            <div className="grid grid-cols-1 gap-3.5">
+              {currentQuestion.options.map((opt, i) => {
+                const colors = [
+                  'from-rose-600 to-red-700 hover:from-rose-500 hover:to-red-600 border-red-500/40 shadow-red-500/20',
+                  'from-blue-600 to-indigo-700 hover:from-blue-500 hover:to-indigo-600 border-blue-500/40 shadow-blue-500/20',
+                  'from-amber-500 to-orange-600 hover:from-amber-400 hover:to-orange-500 border-orange-500/40 shadow-orange-500/20',
+                  'from-emerald-600 to-teal-700 hover:from-emerald-500 hover:to-teal-600 border-emerald-500/40 shadow-emerald-500/20',
+                ];
+                return (
+                  <button
+                    key={i}
+                    onClick={() => submitAnswer(i)}
+                    className={`w-full p-5 rounded-2xl bg-gradient-to-r ${colors[i % 4]} border-2 text-white font-black text-xl shadow-lg flex items-center justify-between active:scale-95 transition-all cursor-pointer`}
+                  >
+                    <span className="truncate">{opt}</span>
+                    <span className="w-9 h-9 rounded-xl bg-white/20 flex items-center justify-center text-sm font-black shrink-0">
+                      {i + 1}
+                    </span>
+                  </button>
+                );
+              })}
+            </div>
+          )}
         </div>
       )}
 
@@ -286,7 +337,14 @@ export default function PlayPage() {
       {step === 'SHOW_RESULT' && (
         <div className="w-full max-w-md text-center z-10 animate-scale-up">
           <div className="bg-[#130728]/80 backdrop-blur-2xl p-10 rounded-3xl border border-white/15 space-y-6 shadow-2xl">
-            {selectedIndex === correctOption ? (
+            {currentQuestion?.questionType === 'poll' ? (
+              <div className="space-y-3">
+                <div className="text-7xl animate-bounce">📊</div>
+                <h2 className="text-3xl font-black text-fuchsia-300">
+                  תודה שהשתתפת בסקר!
+                </h2>
+              </div>
+            ) : selectedIndex === correctOption ? (
               <div className="space-y-3">
                 <div className="text-7xl animate-bounce">🎉</div>
                 <h2 className="text-4xl font-black text-emerald-400 drop-shadow-[0_0_15px_rgba(52,211,153,0.4)]">
