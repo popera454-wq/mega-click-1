@@ -24,21 +24,16 @@ export default function PlayPage() {
   const [step, setStep] = useState<PlayerStep>('JOIN');
   const [error, setError] = useState('');
 
-  // Player State
   const [playerId] = useState(
     () => 'player_' + Math.random().toString(36).substring(2, 9)
   );
-  const [currentQuestion, setCurrentQuestion] = useState<QuestionData | null>(
-    null
-  );
+  const [currentQuestion, setCurrentQuestion] = useState<QuestionData | null>(null);
   const [selectedIndex, setSelectedIndex] = useState<number | null>(null);
   const [correctOption, setCorrectOption] = useState<number | null>(null);
   const [startTime, setStartTime] = useState<number>(0);
-  const [myScore, setMyScore] = useState<number>(0);
 
   const channelRef = useRef<any>(null);
 
-  // התחברות לחדר המשחק בלייב
   const joinGame = async (e: React.FormEvent) => {
     e.preventDefault();
     setError('');
@@ -52,11 +47,22 @@ export default function PlayPage() {
       return;
     }
 
+    // 1. שמירת השחקן בטבלת game_players ב-Supabase
+    const { error: dbErr } = await supabase.from('game_players').upsert({
+      game_pin: pin,
+      player_name: playerName,
+      phone: playerId, // מפתח מזהה ייחודי לשחקן האתר
+    });
+
+    if (dbErr) {
+      console.error('Error saving player:', dbErr);
+    }
+
+    // 2. חיבור לערוץ Realtime לקבלת השאלות מהמנחה
     const channel = supabase.channel(`game_${pin}`, {
       config: { presence: { key: playerId } },
     });
 
-    // האזנה לאירועים מהמנחה
     channel.on('broadcast', { event: 'QUESTION_START' }, ({ payload }) => {
       setCurrentQuestion(payload);
       setSelectedIndex(null);
@@ -86,14 +92,22 @@ export default function PlayPage() {
     channelRef.current = channel;
   };
 
-  // שליחת תשובה מהשחקן
-  const submitAnswer = (optionIndex: number) => {
+  const submitAnswer = async (optionIndex: number) => {
     if (selectedIndex !== null || !currentQuestion) return;
 
     const timeTaken = (Date.now() - startTime) / 1000;
     setSelectedIndex(optionIndex);
     setStep('ANSWERED');
 
+    // שמירת תשובת האתר ב-DB
+    await supabase.from('game_answers').insert({
+      game_pin: pin,
+      phone: playerId,
+      answer_index: optionIndex,
+      question_index: currentQuestion.questionIndex,
+    });
+
+    // שידור למנחה ב-Broadcast
     channelRef.current?.send({
       type: 'broadcast',
       event: 'SUBMIT_ANSWER',
@@ -115,7 +129,6 @@ export default function PlayPage() {
 
   return (
     <main className="min-h-screen grid-bg bg-[#0d041e] text-white dir-rtl flex flex-col justify-center items-center p-4 select-none">
-      {/* 1. מסך הצטרפות */}
       {step === 'JOIN' && (
         <form
           onSubmit={joinGame}
@@ -155,7 +168,6 @@ export default function PlayPage() {
         </form>
       )}
 
-      {/* 2. מסך המתנה להתחלת המשחק */}
       {step === 'WAITING' && (
         <div className="text-center space-y-4 animate-in zoom-in duration-300">
           <div className="w-20 h-20 mx-auto rounded-full bg-fuchsia-500/20 border-2 border-fuchsia-500 flex items-center justify-center text-3xl animate-bounce">
@@ -166,7 +178,6 @@ export default function PlayPage() {
         </div>
       )}
 
-      {/* 3. מסך מענה על שאלה */}
       {step === 'QUESTION' && currentQuestion && (
         <div className="w-full max-w-md space-y-6">
           <div className="text-center">
@@ -202,7 +213,6 @@ export default function PlayPage() {
         </div>
       )}
 
-      {/* 4. מסך לאחר בחירת תשובה */}
       {step === 'ANSWERED' && (
         <div className="text-center space-y-4">
           <div className="text-5xl">👍</div>
@@ -211,7 +221,6 @@ export default function PlayPage() {
         </div>
       )}
 
-      {/* 5. תוצאת השאלה */}
       {step === 'SHOW_RESULT' && (
         <div className="text-center space-y-4">
           {selectedIndex === correctOption ? (
@@ -231,7 +240,6 @@ export default function PlayPage() {
         </div>
       )}
 
-      {/* 6. סיום המשחק */}
       {step === 'GAME_OVER' && (
         <div className="text-center space-y-4">
           <div className="text-6xl">🏆</div>
