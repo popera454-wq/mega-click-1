@@ -1,4 +1,5 @@
 import { supabase } from "@/lib/supabase";
+import { NextResponse } from "next/server";
 
 export const dynamic = "force-dynamic";
 
@@ -23,7 +24,7 @@ async function handleRequest(req: Request) {
   try {
     const url = new URL(req.url);
     
-    // שליפת המשתנים בצורה רחבה (תומך בכל סוגי השרתים וההגדרות של ימות המשיח)
+    // שליפת מספר הטלפון
     const rawPhone =
       url.searchParams.get("ApiPhone") ||
       url.searchParams.get("api_phone") ||
@@ -32,36 +33,20 @@ async function handleRequest(req: Request) {
       "";
     const phone = cleanPhone(rawPhone);
 
-    const inputPin = String(
-      url.searchParams.get("q_pin") || 
-      url.searchParams.get("val_name_q_pin") || 
-      url.searchParams.get("api_val_name_q_pin") || 
-      ""
-    ).trim();
-    
-    const inputAns = String(
-      url.searchParams.get("q_ans") || 
-      url.searchParams.get("val_name_q_ans") || 
-      url.searchParams.get("api_val_name_q_ans") || 
-      ""
-    ).trim();
-    
-    const inputRange = String(
-      url.searchParams.get("q_range") || 
-      url.searchParams.get("val_name_q_range") || 
-      url.searchParams.get("api_val_name_q_range") || 
-      ""
-    ).trim();
-
-    // הגנה מפני לופים: אם אין מספר טלפון, נחזיר הודעת טקסט פשוטה שלא מנתקת
+    // הגנה קריטית למניעת לופים וניתוקים - אם אין טלפון מחזירים הודעה שלא תתקע את הקו
     if (!phone) {
-      return new Response("id_list_message=f-שגיאה בזיהוי מספר הטלפון", {
+      return new NextResponse("id_list_message=f-שגיאה בזיהוי מספר הטלפון", {
         status: 200,
         headers: { "Content-Type": "text/plain; charset=utf-8" },
       });
     }
 
-    // 2. שליפת סשן באופן בטוח מ-Supabase
+    // שליפת נתוני הקשות המשתמשים
+    const inputPin = String(url.searchParams.get("q_pin") || url.searchParams.get("val_name_q_pin") || "").trim();
+    const inputAns = String(url.searchParams.get("q_ans") || url.searchParams.get("val_name_q_ans") || "").trim();
+    const inputRange = String(url.searchParams.get("q_range") || url.searchParams.get("val_name_q_range") || "").trim();
+
+    // 2. בדיקת סטטוס ב-Supabase
     let session = null;
     try {
       const { data } = await supabase
@@ -71,8 +56,8 @@ async function handleRequest(req: Request) {
         .maybeSingle();
       session = data;
     } catch (e) {
-      console.error("Supabase Session Fetch Error:", e);
-      return new Response("id_list_message=f-שגיאה בחיבור לבסיס הנתונים", {
+      console.error("Supabase Error:", e);
+      return new NextResponse("id_list_message=f-שגיאה בתקשורת הנתונים", {
         status: 200,
         headers: { "Content-Type": "text/plain; charset=utf-8" },
       });
@@ -80,7 +65,7 @@ async function handleRequest(req: Request) {
 
     const activePin = session?.pin ? String(session.pin) : null;
 
-    // 3. הרשמה / התחברות למשחק
+    // 3. שלב ההתחברות למשחק (הקשת ה-PIN הראשונית)
     if ((inputPin && inputPin !== activePin) || (!activePin && inputPin)) {
       if (!/^\d{6}$/.test(inputPin)) {
         return makeIvrRead("קוד שגוי. נא להקיש קוד בן 6 ספרות", "q_pin", 6, 6);
@@ -112,7 +97,7 @@ async function handleRequest(req: Request) {
       return makeIvrWait("התחברת בהצלחה. ממתין להתחלת המשחק");
     }
 
-    // 4. ניהול שיחה למשתמש מחובר
+    // 4. ניהול שלבי המשחק בזמן אמת (לאחר שהשחקן מחובר)
     if (activePin) {
       const { data: gameData } = await supabase
         .from("games")
@@ -216,11 +201,12 @@ async function handleRequest(req: Request) {
       }
     }
 
+    // מענה ברירת מחדל ראשוני
     return makeIvrRead("ברוכים הבאים. נא להקיש את קוד המשחק בן 6 הספרות", "q_pin", 6, 6);
 
   } catch (err) {
     console.error("IVR System Error:", err);
-    return new Response("id_list_message=f-אירעה שגיאה כללית במערכת", {
+    return new NextResponse("id_list_message=f-אירעה שגיאה כללית במערכת", {
       status: 200,
       headers: { "Content-Type": "text/plain; charset=utf-8" },
     });
@@ -228,14 +214,14 @@ async function handleRequest(req: Request) {
 }
 
 function makeIvrRead(text: string, valName: string, minDigits = 1, maxDigits = 1, timeout = 10) {
-  return new Response(`read=t-${text}=${valName},no,${minDigits},${maxDigits},${timeout},Digits,no,no`, {
+  return new NextResponse(`read=t-${text}=${valName},no,${minDigits},${maxDigits},${timeout},Digits,no,no`, {
     status: 200,
     headers: { "Content-Type": "text/plain; charset=utf-8" },
   });
 }
 
 function makeIvrWait(text: string) {
-  return new Response(`read=t-${text}=q_wait,no,1,1,2,Digits,no,no`, {
+  return new NextResponse(`read=t-${text}=q_wait,no,1,1,2,Digits,no,no`, {
     status: 200,
     headers: { "Content-Type": "text/plain; charset=utf-8" },
   });
