@@ -23,7 +23,7 @@ async function handleRequest(req: Request) {
   try {
     const url = new URL(req.url);
 
-    // תפיסת מספר הטלפון מכל האפשרויות שימות המשיח שולחת
+    // תפיסת מספר הטלפון
     const rawPhone =
       url.searchParams.get("ApiPhone") ||
       url.searchParams.get("api_phone") ||
@@ -32,7 +32,15 @@ async function handleRequest(req: Request) {
       "";
     const phone = cleanPhone(rawPhone);
 
-    // תפיסת הערכים שהוקשו על ידי המאזין
+    // הגנה קריטית: אם אין מספר טלפון, אסור להחזיר READ כי זה יגרום ללופ ניתוקים
+    if (!phone) {
+      return new Response("id_list_message=f-שגיאה בזיהוי מספר הטלפון", {
+        status: 200,
+        headers: { "Content-Type": "text/plain; charset=utf-8" },
+      });
+    }
+
+    // תפיסת הערכים שהוקשו
     const inputPin = String(
       url.searchParams.get("q_pin") || 
       url.searchParams.get("val_name_q_pin") || 
@@ -54,11 +62,6 @@ async function handleRequest(req: Request) {
       ""
     ).trim();
 
-    // 1. קילוף ראשוני - אם אין טלפון
-    if (!phone) {
-      return makeIvrRead("ברוכים הבאים. נא להקיש את קוד המשחק בן 6 הספרות", "q_pin", 6, 6);
-    }
-
     // 2. שליפת סשן באופן בטוח
     let session = null;
     try {
@@ -70,6 +73,10 @@ async function handleRequest(req: Request) {
       session = data;
     } catch (e) {
       console.error("Supabase Session Fetch Error:", e);
+      return new Response("id_list_message=f-שגיאה בחיבור לבסיס הנתונים", {
+        status: 200,
+        headers: { "Content-Type": "text/plain; charset=utf-8" },
+      });
     }
 
     const activePin = session?.pin ? String(session.pin) : null;
@@ -210,11 +217,14 @@ async function handleRequest(req: Request) {
       }
     }
 
-    return makeIvrRead("ברוכים הבאים. נא להקיש את קוד המשחק", "q_pin", 6, 6);
+    return makeIvrRead("ברוכים הבאים. נא להקיש את קוד המשחק בן 6 הספרות", "q_pin", 6, 6);
 
   } catch (err) {
     console.error("IVR System Error:", err);
-    return makeIvrRead("אירעה שגיאה בתקשורת. נא להקיש את קוד המשחק שנית", "q_pin", 6, 6);
+    return new Response("id_list_message=f-אירעה שגיאה כללית במערכת", {
+      status: 200,
+      headers: { "Content-Type": "text/plain; charset=utf-8" },
+    });
   }
 }
 
