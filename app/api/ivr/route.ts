@@ -19,24 +19,24 @@ async function handleRequest(req: Request) {
     const inputAns = searchParams.get("q_ans") || searchParams.get("val_name_q_ans") || "";
     const currentQ = parseInt(searchParams.get("q_num") || "0", 10);
 
-    // מקרה 1: אין מספר טלפון
+    // 1. אין טלפון בשיחה
     if (!phone) {
       return sendIvrResponse("read=t-שלום הקש את קוד המשחק=q_pin,no,6,6,10,Digits,no,no,");
     }
 
-    // מקרה 2: הקשת PIN
+    // 2. הזנת קוד משחק PIN חדש - דורס סשן קודם!
     if (inputPin) {
       if (!/^\d{6}$/.test(inputPin)) {
         return sendIvrResponse("read=t-קוד לא תקין הקש שוב=q_pin,no,6,6,10,Digits,no,no,");
       }
 
-      // שמירת סשן
+      // עדכון/איפוס הסשן לקוד המשחק החדש
       await supabase.from("ivr_sessions").upsert(
         { phone, pin: inputPin, updated_at: new Date().toISOString() },
         { onConflict: "phone" }
       );
 
-      // שמירת שחקן ב-DB (זה מה שיזניק את מסך המנחה!)
+      // שמירת השחקן בטבלת game_players
       const { error: playerErr } = await supabase.from("game_players").upsert(
         {
           game_pin: inputPin,
@@ -54,7 +54,7 @@ async function handleRequest(req: Request) {
       return sendIvrResponse("read=t-התחברת בהצלחה הקש את מספר התשובה=q_ans,no,1,1,15,Digits,no,no,");
     }
 
-    // מקרה 3: בדיקת סשן קיים
+    // 3. בדיקת סשן קיים
     const { data: session } = await supabase
       .from("ivr_sessions")
       .select("pin")
@@ -65,7 +65,7 @@ async function handleRequest(req: Request) {
       return sendIvrResponse("read=t-ברוכים הבאים הקש את קוד המשחק=q_pin,no,6,6,10,Digits,no,no,");
     }
 
-    // מקרה 4: קבלת תשובה
+    // 4. קבלת תשובה לשאלה
     if (!inputAns) {
       return sendIvrResponse("read=t-הקש את מספר התשובה=q_ans,no,1,1,15,Digits,no,no,");
     }
@@ -75,7 +75,7 @@ async function handleRequest(req: Request) {
       return sendIvrResponse("read=t-תשובה לא תקינה הקש בין אחת לארבע=q_ans,no,1,1,15,Digits,no,no,");
     }
 
-    // שמירת תשובה ב-DB
+    // שמירת התשובה בטבלת game_answers
     await supabase.from("game_answers").insert({
       game_pin: session.pin,
       phone,
