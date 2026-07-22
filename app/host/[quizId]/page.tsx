@@ -259,23 +259,43 @@ export default function HostGamePage({
 
   const showLeaderboard = () => setGameState('LEADERBOARD');
 
-  // 🧹 מחיקה מובטחת מכל 3 הטבלאות
+  // 🧹 מחיקה מובטחת מכל 3 הטבלאות (כולל ניקוי מ-ivr_sessions לפי PIN וטלפונים)
   const finishGameCleanup = async () => {
     setGameState('GAME_OVER');
 
     const pinStr = String(pinCode);
 
-    // ביצוע מחיקה מפורשת
-    const [resPlayers, resAnswers, resSessions] = await Promise.all([
+    // 1. איתור כל מספרי הטלפון שהיו שותפים ל-PIN הזה
+    const { data: playersToDelete } = await supabase
+      .from('game_players')
+      .select('phone')
+      .eq('game_pin', pinStr);
+
+    const phonesList = playersToDelete?.map((p) => p.phone).filter(Boolean) || [];
+
+    // 2. הכנת פעולות המחיקה מכל הטבלאות
+    const cleanupPromises: Promise<any>[] = [
       supabase.from('game_players').delete().eq('game_pin', pinStr),
       supabase.from('game_answers').delete().eq('game_pin', pinStr),
-      supabase.from('ivr_sessions').delete().eq('pin', pinStr)
-    ]);
+      supabase.from('ivr_sessions').delete().eq('pin', pinStr),
+    ];
 
-    if (resPlayers.error) console.error("שגיאה במחיקת שחקנים:", resPlayers.error);
-    if (resAnswers.error) console.error("שגיאה במחיקת תשובות:", resAnswers.error);
-    if (resSessions.error) console.error("שגיאה במחיקת סשנים:", resSessions.error);
+    // אם נמצאו מספרי טלפון, נמחק גם אותם מ-ivr_sessions
+    if (phonesList.length > 0) {
+      cleanupPromises.push(
+        supabase.from('ivr_sessions').delete().in('phone', phonesList)
+      );
+    }
 
+    // 3. ביצוע כל המחיקות במקביל
+    const results = await Promise.all(cleanupPromises);
+
+    // בדיקת לוג לדיבאג
+    results.forEach((res, idx) => {
+      if (res.error) console.error(`שגיאה במחיקת נתונים בשלב ${idx}:`, res.error);
+    });
+
+    // 4. שידור סיום משחק לכל הלקוחות
     channelRef.current?.send({
       type: 'broadcast',
       event: 'GAME_OVER',
