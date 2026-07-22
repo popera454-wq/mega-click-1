@@ -22,45 +22,47 @@ function cleanPhone(p: string): string {
 async function handleRequest(req: Request) {
   try {
     const url = new URL(req.url);
+    
+    // שליפת משתנים מתוך ה-URL (עבור בקשות GET)
+    let apiPhone = url.searchParams.get("ApiPhone") || url.searchParams.get("api_phone") || url.searchParams.get("phone") || url.searchParams.get("ApiDID") || "";
+    let inputPin = url.searchParams.get("q_pin") || url.searchParams.get("val_name_q_pin") || url.searchParams.get("api_val_name_q_pin") || "";
+    let inputAns = url.searchParams.get("q_ans") || url.searchParams.get("val_name_q_ans") || url.searchParams.get("api_val_name_q_ans") || "";
+    let inputRange = url.searchParams.get("q_range") || url.searchParams.get("val_name_q_range") || url.searchParams.get("api_val_name_q_range") || "";
 
-    // תפיסת מספר הטלפון
-    const rawPhone =
-      url.searchParams.get("ApiPhone") ||
-      url.searchParams.get("api_phone") ||
-      url.searchParams.get("phone") ||
-      url.searchParams.get("ApiDID") ||
-      "";
-    const phone = cleanPhone(rawPhone);
+    // אם מדובר בבקשת POST, ננסה לשלוף את הפרמטרים מתוך ה-Body (הפורמט שימות המשיח שולחת)
+    if (req.method === "POST") {
+      try {
+        const contentType = req.headers.get("content-type") || "";
+        if (contentType.includes("application/x-www-form-urlencoded") || contentType.includes("multipart/form-data")) {
+          const formData = await req.formData();
+          apiPhone = formData.get("ApiPhone")?.toString() || formData.get("api_phone")?.toString() || formData.get("phone")?.toString() || formData.get("ApiDID")?.toString() || apiPhone;
+          inputPin = formData.get("q_pin")?.toString() || formData.get("val_name_q_pin")?.toString() || formData.get("api_val_name_q_pin")?.toString() || inputPin;
+          inputAns = formData.get("q_ans")?.toString() || formData.get("val_name_q_ans")?.toString() || formData.get("api_val_name_q_ans")?.toString() || inputAns;
+          inputRange = formData.get("q_range")?.toString() || formData.get("val_name_q_range")?.toString() || formData.get("api_val_name_q_range")?.toString() || inputRange;
+        } else {
+          const json = await req.json();
+          apiPhone = json.ApiPhone || json.api_phone || json.phone || json.ApiDID || apiPhone;
+          inputPin = json.q_pin || json.val_name_q_pin || json.api_val_name_q_pin || inputPin;
+          inputAns = json.q_ans || json.val_name_q_ans || json.api_val_name_q_ans || inputAns;
+          inputRange = json.q_range || json.val_name_q_range || json.api_val_name_q_range || inputRange;
+        }
+      } catch (e) {
+        // אם ה-Body ריק או בפורמט לא מוכר, נמשיך עם מה שנתפס ב-URL
+      }
+    }
 
-    // הגנה קריטית: אם אין מספר טלפון, אסור להחזיר READ כי זה יגרום ללופ ניתוקים
+    const phone = cleanPhone(apiPhone);
+    inputPin = String(inputPin).trim();
+    inputAns = String(inputAns).trim();
+    inputRange = String(inputRange).trim();
+
+    // הגנה קריטית: אם אין מספר טלפון, נחזיר הודעה ברורה
     if (!phone) {
       return new Response("id_list_message=f-שגיאה בזיהוי מספר הטלפון", {
         status: 200,
         headers: { "Content-Type": "text/plain; charset=utf-8" },
       });
     }
-
-    // תפיסת הערכים שהוקשו
-    const inputPin = String(
-      url.searchParams.get("q_pin") || 
-      url.searchParams.get("val_name_q_pin") || 
-      url.searchParams.get("api_val_name_q_pin") || 
-      ""
-    ).trim();
-    
-    const inputAns = String(
-      url.searchParams.get("q_ans") || 
-      url.searchParams.get("val_name_q_ans") || 
-      url.searchParams.get("api_val_name_q_ans") || 
-      ""
-    ).trim();
-    
-    const inputRange = String(
-      url.searchParams.get("q_range") || 
-      url.searchParams.get("val_name_q_range") || 
-      url.searchParams.get("api_val_name_q_range") || 
-      ""
-    ).trim();
 
     // 2. שליפת סשן באופן בטוח
     let session = null;
@@ -229,7 +231,6 @@ async function handleRequest(req: Request) {
 }
 
 function makeIvrRead(text: string, valName: string, minDigits = 1, maxDigits = 1, timeout = 10) {
-  // הסרת הפסיק האחרון כדי למנוע שיבושי תווים בימות המשיח
   const responseText = `read=t-${text}=${valName},no,${minDigits},${maxDigits},${timeout},Digits,no,no`;
   return new Response(responseText, {
     status: 200,
@@ -240,7 +241,6 @@ function makeIvrRead(text: string, valName: string, minDigits = 1, maxDigits = 1
 }
 
 function makeIvrWait(text: string) {
-  // הסרת הפסיק האחרון למניעת שיבושים
   const responseText = `read=t-${text}=q_wait,no,1,1,2,Digits,no,no`;
   return new Response(responseText, {
     status: 200,
