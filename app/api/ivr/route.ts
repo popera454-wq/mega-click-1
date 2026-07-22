@@ -24,21 +24,35 @@ async function handleRequest(req: Request) {
   try {
     const url = new URL(req.url);
 
+    // תפיסת מספר הטלפון מכל האפשרויות שימות המשיח שולחת ב-GET או ב-POST
     const rawPhone =
       url.searchParams.get("ApiPhone") ||
+      url.searchParams.get("api_phone") ||
       url.searchParams.get("phone") ||
       url.searchParams.get("ApiDID") ||
       "";
     const phone = cleanPhone(rawPhone);
 
+    // תפיסת הערכים שהוקשו - תומך גם בפורמט הרגיל וגם בפורמט של ה-val_name
     const inputPin = String(
-      url.searchParams.get("q_pin") || url.searchParams.get("val_name_q_pin") || ""
+      url.searchParams.get("q_pin") || 
+      url.searchParams.get("val_name_q_pin") || 
+      url.searchParams.get("api_val_name_q_pin") || 
+      ""
     ).trim();
+    
     const inputAns = String(
-      url.searchParams.get("q_ans") || url.searchParams.get("val_name_q_ans") || ""
+      url.searchParams.get("q_ans") || 
+      url.searchParams.get("val_name_q_ans") || 
+      url.searchParams.get("api_val_name_q_ans") || 
+      ""
     ).trim();
+    
     const inputRange = String(
-      url.searchParams.get("q_range") || url.searchParams.get("val_name_q_range") || ""
+      url.searchParams.get("q_range") || 
+      url.searchParams.get("val_name_q_range") || 
+      url.searchParams.get("api_val_name_q_range") || 
+      ""
     ).trim();
 
     // 1. קילוף ראשוני - אם אין טלפון
