@@ -17,7 +17,6 @@ interface Player {
   id: string;
   name: string;
   score: number;
-  isPhone?: boolean;
   phone?: string;
   lastAnswerIndex?: number;
 }
@@ -54,7 +53,7 @@ export default function HostGamePage({
   const channelRef = useRef<any>(null);
   const timerRef = useRef<any>(null);
 
-  // 1. טעינת ה חידון
+  // 1. טעינת מידע על החידון
   useEffect(() => {
     const initHost = async () => {
       const { data: { user } } = await supabase.auth.getUser();
@@ -83,123 +82,82 @@ export default function HostGamePage({
     initHost();
   }, [quizId, router]);
 
-  // 2. האזנה משולבת: Presence (אתר) + Postgres Realtime (טלפונים)
-  useEffect(() => {
-    if (loading || questions.length === 0) return;
+  // 2. פונקציית טעינת שחקנים מטבלת game_players
+  const fetchDbPlayers = async () => {
+    const { data } = await supabase
+      .from('game_players')
+      .select('*')
+      .eq('game_pin', pinCode);
 
-    // ערוץ Broadcast & Presence לאתר
-    const channel = supabase.channel(`game_${pinCode}`, {
-      config: { presence: { key: 'host' } },
-    });
-
-    // א. שחקני אתר מגיעים מ-Presence
-    channel.on('presence', { event: 'sync' }, () => {
-      const state = channel.presenceState();
-      const webPlayers: Player[] = [];
-
-      Object.keys(state).forEach((key) => {
-        if (key !== 'host') {
-          const presences = state[key] as any[];
-          if (presences.length > 0) {
-            webPlayers.push({
-              id: key,
-              name: presences[0].name || 'שחקן',
-              score: presences[0].score || 0,
-              isPhone: false,
-            });
-          }
-        }
-      });
-
+    if (data) {
       setPlayers((prev) => {
-        const phonePlayers = prev.filter((p) => p.isPhone);
-        const mergedWeb = webPlayers.map((p) => {
-          const existing = prev.find((prevP) => prevP.id === p.id);
-          return existing ? { ...p, score: existing.score } : p;
+        return data.map((dbP) => {
+          const existing = prev.find((p) => p.phone === dbP.phone || p.name === dbP.player_name);
+          return {
+            id: dbP.id || dbP.phone,
+            name: dbP.player_name || `שחקן ${dbP.phone.slice(-4)}`,
+            phone: dbP.phone,
+            score: existing ? existing.score : 0,
+            lastAnswerIndex: existing ? existing.lastAnswerIndex : undefined,
+          };
         });
-        return [...phonePlayers, ...mergedWeb];
       });
-    });
+    }
+  };
 
-    // ב. תשובות שחקני אתר
-    channel.on('broadcast', { event: 'SUBMIT_ANSWER' }, ({ payload }) => {
-      handleAnswerSubmitted(payload.playerId, payload.answerIndex, payload.timeTaken);
-    });
+  // 3. סנכרון בזמן אמת + פולינג גיבוי בלובי
+  useEffect(() => {
+    if (loading) return;
 
-    channel.subscribe(async (status) => {
-      if (status === 'SUBSCRIBED') {
-        await channel.track({ role: 'host' });
+    fetchDbPlayers();
+
+    // Polling כל 2 שניות בלובי כדי להתגבר על בעיות Realtime
+    const interval = setInterval(() => {
+      if (gameState === 'LOBBY' || gameState === 'QUESTION') {
+        fetchDbPlayers();
       }
-    });
+    }, 2000);
 
-    channelRef.current = channel;
+    const channel = supabase.channel(`game_${pinCode}`);
 
-    // ג. שחקני טלפון מגיעים ב-Realtime מה-DB (טבלת game_players)
-    const dbChannel = supabase
-      .channel(`db_players_${pinCode}`)
+    // האזנה להצטרפות ב-Realtime
+    const dbSub = supabase
+      .channel(`db_changes_${pinCode}`)
       .on(
         'postgres_changes',
-        {
-          event: 'INSERT',
-          schema: 'public',
-          table: 'game_players',
-          filter: `game_pin=eq.${pinCode}`,
-        },
-        (payload) => {
-          const newPhonePlayer = payload.new;
-          setPlayers((prev) => {
-            if (prev.some((p) => p.id === `phone_${newPhonePlayer.phone}`)) return prev;
-            return [
-              ...prev,
-              {
-                id: `phone_${newPhonePlayer.phone}`,
-                name: newPhonePlayer.player_name || `טלפון ${newPhonePlayer.phone.slice(-4)}`,
-                phone: newPhonePlayer.phone,
-                score: 0,
-                isPhone: true,
-              },
-            ];
-          }
-          );
-        }
+        { event: '*', schema: 'public', table: 'game_players', filter: `game_pin=eq.${pinCode}` },
+        () => fetchDbPlayers()
       )
-      // ד. תשובות שחקני טלפון מגיעות מ-game_answers
       .on(
         'postgres_changes',
-        {
-          event: 'INSERT',
-          schema: 'public',
-          table: 'game_answers',
-          filter: `game_pin=eq.${pinCode}`,
-        },
+        { event: 'INSERT', schema: 'public', table: 'game_answers', filter: `game_pin=eq.${pinCode}` },
         (payload) => {
           const ans = payload.new;
-          const playerId = `phone_${ans.phone}`;
-          handleAnswerSubmitted(playerId, ans.answer_index, 5); // ממוצע 5 שניות לטלפון
+          handleAnswerSubmitted(ans.phone, ans.answer_index, 5);
         }
       )
       .subscribe();
 
-    return () => {
-      supabase.removeChannel(channel);
-      supabase.removeChannel(dbChannel);
-    };
-  }, [pinCode, loading, questions, currentQuestionIndex]);
+    channelRef.current = channel;
 
-  // פונקציית חישוב תשובות אחידה (גם לאתר וגם לטלפון)
-  const handleAnswerSubmitted = (playerId: string, answerIndex: number, timeTaken: number) => {
+    return () => {
+      clearInterval(interval);
+      supabase.removeChannel(channel);
+      supabase.removeChannel(dbSub);
+    };
+  }, [pinCode, loading, gameState]);
+
+  // חישוב תשובות
+  const handleAnswerSubmitted = (identifier: string, answerIndex: number, timeTaken: number) => {
     const currentQ = questions[currentQuestionIndex];
 
     setPlayers((prevPlayers) => {
       return prevPlayers.map((p) => {
-        if (p.id === playerId) {
-          if (p.lastAnswerIndex !== undefined) return p; // מניעת תשובה כפולה באותה שאלה
+        if (p.phone === identifier || p.id === identifier) {
+          if (p.lastAnswerIndex !== undefined) return p;
           const isCorrect = answerIndex === currentQ.correct_option;
           const bonus = isCorrect
-            ? Math.max(
-                200,
-                Math.round(1000 * (1 - timeTaken / (currentQ.time_limit || 20)))
-              )
+            ? Math.max(200, Math.round(1000 * (1 - timeTaken / (currentQ.time_limit || 20))))
             : 0;
           return {
             ...p,
@@ -214,7 +172,7 @@ export default function HostGamePage({
     setAnswersCount((prev) => prev + 1);
   };
 
-  // מנגנון הטיימר
+  // מנגנון טיימר
   useEffect(() => {
     if (gameState === 'QUESTION' && timeLeft > 0) {
       timerRef.current = setInterval(() => {
@@ -226,16 +184,6 @@ export default function HostGamePage({
 
     return () => clearInterval(timerRef.current);
   }, [gameState, timeLeft]);
-
-  useEffect(() => {
-    if (
-      gameState === 'QUESTION' &&
-      players.length > 0 &&
-      answersCount >= players.length
-    ) {
-      endQuestion();
-    }
-  }, [answersCount, players.length, gameState]);
 
   const startGame = () => {
     if (players.length === 0) {
@@ -251,7 +199,6 @@ export default function HostGamePage({
     setTimeLeft(questions[index].time_limit || 20);
     setGameState('QUESTION');
 
-    // איפוס תשובות קודמות
     setPlayers((prev) => prev.map((p) => ({ ...p, lastAnswerIndex: undefined })));
 
     channelRef.current?.send({
@@ -275,24 +222,32 @@ export default function HostGamePage({
     channelRef.current?.send({
       type: 'broadcast',
       event: 'QUESTION_END',
-      payload: {
-        correctOption: currentQ.correct_option,
-      },
+      payload: { correctOption: currentQ.correct_option },
     });
   };
 
   const showLeaderboard = () => setGameState('LEADERBOARD');
 
+  // סיום המשחק וניקוי הטבלאות ב-Supabase!
+  const finishGameCleanup = async () => {
+    setGameState('GAME_OVER');
+    
+    // מחיקת השחקנים והתשובות של המשחק הנוכחי מהטבלאות ב-DB
+    await supabase.from('game_players').delete().eq('game_pin', pinCode);
+    await supabase.from('game_answers').delete().eq('game_pin', pinCode);
+
+    channelRef.current?.send({
+      type: 'broadcast',
+      event: 'GAME_OVER',
+      payload: {},
+    });
+  };
+
   const nextQuestion = () => {
     if (currentQuestionIndex + 1 < questions.length) {
       startQuestion(currentQuestionIndex + 1);
     } else {
-      setGameState('GAME_OVER');
-      channelRef.current?.send({
-        type: 'broadcast',
-        event: 'GAME_OVER',
-        payload: {},
-      });
+      finishGameCleanup();
     }
   };
 
@@ -300,20 +255,6 @@ export default function HostGamePage({
     return (
       <main className="min-h-screen grid-bg bg-[#0d041e] text-white flex justify-center items-center dir-rtl">
         <p className="text-white/60 animate-pulse">מכין את קוד המשחק...</p>
-      </main>
-    );
-  }
-
-  if (questions.length === 0) {
-    return (
-      <main className="min-h-screen grid-bg bg-[#0d041e] text-white flex flex-col justify-center items-center gap-4 dir-rtl p-6 text-center">
-        <h2 className="text-2xl font-bold">לא נמצאו שאלות בחידון זה!</h2>
-        <Link
-          href={`/dashboard/quiz/${quizId}`}
-          className="px-6 py-3 rounded-xl bg-fuchsia-500 font-bold"
-        >
-          חזור לעריכת שאלות
-        </Link>
       </main>
     );
   }
@@ -355,7 +296,7 @@ export default function HostGamePage({
           <div className="glass rounded-3xl p-8 border border-white/10 min-h-[250px] mb-8 flex flex-wrap gap-4 items-center justify-center">
             {players.length === 0 ? (
               <p className="text-white/40 animate-pulse text-lg">
-                מחכה לשחקנים (מהאתר או מהטלפון)...
+                מחכה לשחקנים...
               </p>
             ) : (
               players.map((p) => (
@@ -363,7 +304,7 @@ export default function HostGamePage({
                   key={p.id}
                   className="bg-gradient-to-r from-fuchsia-500/20 to-violet-500/20 border border-fuchsia-500/40 px-6 py-3 rounded-2xl font-bold text-lg animate-in zoom-in duration-200"
                 >
-                  {p.isPhone ? '📞' : '🎮'} {p.name}
+                  👤 {p.name}
                 </div>
               ))
             )}
@@ -453,7 +394,7 @@ export default function HostGamePage({
                   <span className="w-8 h-8 rounded-full flex items-center justify-center text-sm bg-white/10">
                     {rank + 1}
                   </span>
-                  <span>{p.isPhone ? '📞' : '🎮'} {p.name}</span>
+                  <span>{p.name}</span>
                 </div>
                 <span className="text-fuchsia-300">{p.score} נק׳</span>
               </div>
