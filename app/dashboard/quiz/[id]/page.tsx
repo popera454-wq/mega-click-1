@@ -15,6 +15,7 @@ interface Question {
   question_type: 'single_choice' | 'multiple_correct' | 'true_false' | 'poll' | 'range';
   min_range?: number | null;
   max_range?: number | null;
+  correct_range_value?: number | null;
 }
 
 interface Quiz {
@@ -37,8 +38,9 @@ export default function EditQuizPage({ params }: { params: { id: string } }) {
   const [options, setOptions] = useState<string[]>(['', '', '', '']);
   const [correctOption, setCorrectOption] = useState<number>(0);
   const [correctOptions, setCorrectOptions] = useState<number[]>([]);
-  const [minRange, setMinRange] = useState<number | ''>(30);
-  const [maxRange, setMaxRange] = useState<number | ''>(50);
+  const [minRange, setMinRange] = useState<number | ''>(0);
+  const [maxRange, setMaxRange] = useState<number | ''>(100);
+  const [correctRangeValue, setCorrectRangeValue] = useState<number | ''>(50);
   const [timeLimit, setTimeLimit] = useState<number>(20);
   const [adding, setAdding] = useState(false);
 
@@ -128,6 +130,11 @@ export default function EditQuizPage({ params }: { params: { id: string } }) {
       return;
     }
 
+    if (questionType === 'range' && (minRange === '' || maxRange === '' || correctRangeValue === '')) {
+      alert('נא להגדיר טווח מספרים ואת התשובה הנכונה בטווח');
+      return;
+    }
+
     setAdding(true);
 
     try {
@@ -140,6 +147,7 @@ export default function EditQuizPage({ params }: { params: { id: string } }) {
         correct_options: questionType === 'multiple_correct' ? correctOptions : [],
         min_range: questionType === 'range' ? Number(minRange) : null,
         max_range: questionType === 'range' ? Number(maxRange) : null,
+        correct_range_value: questionType === 'range' ? Number(correctRangeValue) : null,
         time_limit: timeLimit,
       };
 
@@ -160,6 +168,9 @@ export default function EditQuizPage({ params }: { params: { id: string } }) {
       }
       setCorrectOption(0);
       setCorrectOptions([]);
+      setMinRange(0);
+      setMaxRange(100);
+      setCorrectRangeValue(50);
       setTimeLimit(20);
     } catch (err: any) {
       alert('שגיאה בהוספת השאלה: ' + err.message);
@@ -221,7 +232,7 @@ export default function EditQuizPage({ params }: { params: { id: string } }) {
               הוספת שאלה לטלפון 📞
             </h2>
             <p className="text-white/60 text-xs mb-6">
-              בחר את פורמט השאלה שמתאים למשתתפים שחייגים למערכת.
+              בחר את פורמט השאלה שמתאים למשתתפים שמחייגים למערכת.
             </p>
 
             {/* Type Selector Grid */}
@@ -259,7 +270,7 @@ export default function EditQuizPage({ params }: { params: { id: string } }) {
                   required
                   value={questionText}
                   onChange={(e) => setQuestionText(e.target.value)}
-                  placeholder={questionType === 'range' ? 'למשל: בת כמה אמא?' : 'למשל: מהו צבע השמים?'}
+                  placeholder={questionType === 'range' ? 'למשל: בכמה שקלים נמכר המוצר?' : 'למשל: מהו צבע השמים?'}
                   className="w-full px-4 py-3.5 rounded-2xl bg-white/5 border border-white/10 text-white placeholder-white/30 focus:outline-none focus:border-fuchsia-400 focus:bg-white/10 transition-all text-sm"
                 />
               </div>
@@ -283,29 +294,46 @@ export default function EditQuizPage({ params }: { params: { id: string } }) {
 
               {/* Range Configuration */}
               {questionType === 'range' && (
-                <div className="grid grid-cols-2 gap-4 p-4 rounded-2xl bg-fuchsia-500/10 border border-fuchsia-500/20">
+                <div className="space-y-4 p-4 rounded-2xl bg-fuchsia-500/10 border border-fuchsia-500/20">
+                  <div className="grid grid-cols-2 gap-4">
+                    <div>
+                      <label className="block text-xs font-bold text-fuchsia-200 mb-1">ערך מינימלי</label>
+                      <input
+                        type="number"
+                        required
+                        value={minRange}
+                        onChange={(e) => setMinRange(e.target.value === '' ? '' : Number(e.target.value))}
+                        className="w-full px-4 py-3 rounded-xl bg-white/5 border border-white/10 text-white text-sm"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-xs font-bold text-fuchsia-200 mb-1">ערך מקסימלי</label>
+                      <input
+                        type="number"
+                        required
+                        value={maxRange}
+                        onChange={(e) => setMaxRange(e.target.value === '' ? '' : Number(e.target.value))}
+                        className="w-full px-4 py-3 rounded-xl bg-white/5 border border-white/10 text-white text-sm"
+                      />
+                    </div>
+                  </div>
+
                   <div>
-                    <label className="block text-xs font-bold text-fuchsia-200 mb-1">ערך מינימלי</label>
+                    <label className="block text-xs font-bold text-fuchsia-200 mb-1">
+                      🎯 התשובה הנכונה המדויקת (הקרוב ביותר יקבל ניקוד מקסימלי):
+                    </label>
                     <input
                       type="number"
                       required
-                      value={minRange}
-                      onChange={(e) => setMinRange(e.target.value === '' ? '' : Number(e.target.value))}
-                      className="w-full px-4 py-3 rounded-xl bg-white/5 border border-white/10 text-white text-sm"
+                      value={correctRangeValue}
+                      onChange={(e) => setCorrectRangeValue(e.target.value === '' ? '' : Number(e.target.value))}
+                      placeholder="למשל: 42"
+                      className="w-full px-4 py-3 rounded-xl bg-white/5 border border-fuchsia-500/50 text-white text-sm font-bold"
                     />
                   </div>
-                  <div>
-                    <label className="block text-xs font-bold text-fuchsia-200 mb-1">ערך מקסימלי</label>
-                    <input
-                      type="number"
-                      required
-                      value={maxRange}
-                      onChange={(e) => setMaxRange(e.target.value === '' ? '' : Number(e.target.value))}
-                      className="w-full px-4 py-3 rounded-xl bg-white/5 border border-white/10 text-white text-sm"
-                    />
-                  </div>
-                  <div className="col-span-2 text-[11px] text-fuchsia-300">
-                    💡 המשתתפים יקישו מספר בטלפון (למשל יקלידו את המספר ויסיימו בסולמית).
+
+                  <div className="text-[11px] text-fuchsia-300">
+                    💡 המשתתפים יקלידו מספר בטלפון ויסיימו בסולמית (#). המערכת תחשב אוטומטית מי הכי קרוב לתשובה הנכונה.
                   </div>
                 </div>
               )}
@@ -415,8 +443,9 @@ export default function EditQuizPage({ params }: { params: { id: string } }) {
                   </div>
 
                   {q.question_type === 'range' ? (
-                    <div className="mt-3 text-xs text-fuchsia-200 bg-fuchsia-500/10 p-2.5 rounded-xl">
-                      📊 טווח מספרים מ- {q.min_range} עד {q.max_range}
+                    <div className="mt-3 text-xs text-fuchsia-200 bg-fuchsia-500/10 p-3 rounded-xl space-y-1">
+                      <div>📊 טווח מספרים: <strong>{q.min_range} עד {q.max_range}</strong></div>
+                      <div>🎯 התשובה הנכונה: <strong className="text-emerald-400">{q.correct_range_value}</strong></div>
                     </div>
                   ) : (
                     <div className="grid grid-cols-2 gap-2 mt-3 text-xs">
