@@ -259,31 +259,49 @@ export default function HostGamePage({
 
   const showLeaderboard = () => setGameState('LEADERBOARD');
 
-  // 🧹 מחיקה מובטחת מכל 3 הטבלאות
+  // 🧹 1. ניתוק שיחות IVR + 2. מחיקת נתונים מכל 3 הטבלאות
   const finishGameCleanup = async () => {
     setGameState('GAME_OVER');
-
     const pinStr = String(pinCode);
 
     try {
-      const [resPlayers, resAnswers, resSessions] = await Promise.all([
-        supabase.from('game_players').delete().eq('game_pin', pinStr),
+      // א. שולפים מראש את כל מספרי הטלפון שהשתתפו במשחק
+      const { data: dbPlayers } = await supabase
+        .from('game_players')
+        .select('phone')
+        .eq('game_pin', pinStr);
+
+      const phones = dbPlayers?.map((p) => String(p.phone)).filter(Boolean) || [];
+
+      // ב. עדכון IVR לסטטוס FINISHED - מורה למרכזייה להשמיע הודעת סיום ולנתק את השיחה!
+      await supabase
+        .from('ivr_sessions')
+        .update({ status: 'FINISHED' })
+        .or(`pin.eq.${pinStr}${phones.length > 0 ? `,phone.in.(${phones.join(',')})` : ''}`);
+
+      // ג. שידור מניעת פעולות לקוח באתר
+      channelRef.current?.send({
+        type: 'broadcast',
+        event: 'GAME_OVER',
+        payload: {},
+      });
+
+      // ד. השהיה קצרה של 1.5 שניות שמאפשרת למערכת הקולית לקבל את הודעת הניתוק
+      await new Promise((res) => setTimeout(res, 1500));
+
+      // ה. מחיקת כל הנתונים מ-3 הטבלאות
+      await Promise.all([
         supabase.from('game_answers').delete().eq('game_pin', pinStr),
+        supabase.from('game_players').delete().eq('game_pin', pinStr),
         supabase.from('ivr_sessions').delete().eq('pin', pinStr),
       ]);
 
-      if (resPlayers.error) console.error("שגיאה במחיקת שחקנים:", resPlayers.error);
-      if (resAnswers.error) console.error("שגיאה במחיקת תשובות:", resAnswers.error);
-      if (resSessions.error) console.error("שגיאה במחיקת סשנים:", resSessions.error);
+      if (phones.length > 0) {
+        await supabase.from('ivr_sessions').delete().in('phone', phones);
+      }
     } catch (err) {
-      console.error("שגיאה כללית בניקוי המשחק:", err);
+      console.error('שגיאה בתהליך הניתוק והניקוי:', err);
     }
-
-    channelRef.current?.send({
-      type: 'broadcast',
-      event: 'GAME_OVER',
-      payload: {},
-    });
   };
 
   const nextQuestion = () => {
