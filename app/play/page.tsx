@@ -2,6 +2,7 @@
 
 import React, { useState, useEffect, useRef } from 'react';
 import { supabase } from '@/lib/supabase';
+import { RealtimeChannel } from '@supabase/supabase-js';
 
 type PlayerStep =
   | 'JOIN'
@@ -32,7 +33,14 @@ export default function PlayPage() {
   const [correctOption, setCorrectOption] = useState<number | null>(null);
   const [startTime, setStartTime] = useState<number>(0);
 
-  const channelRef = useRef<any>(null);
+  const channelRef = useRef<RealtimeChannel | null>(null);
+
+  const cleanupChannel = () => {
+    if (channelRef.current) {
+      supabase.removeChannel(channelRef.current);
+      channelRef.current = null;
+    }
+  };
 
   const joinGame = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -46,6 +54,9 @@ export default function PlayPage() {
       setError('נא להזין שם שחקן');
       return;
     }
+
+    // ניקוי ערוץ ישן במידה והיה מחובר
+    cleanupChannel();
 
     // 1. שמירת השחקן בטבלת game_players ב-Supabase
     const { error: dbErr } = await supabase.from('game_players').upsert({
@@ -119,11 +130,14 @@ export default function PlayPage() {
     });
   };
 
+  const resetToJoin = () => {
+    cleanupChannel();
+    setStep('JOIN');
+  };
+
   useEffect(() => {
     return () => {
-      if (channelRef.current) {
-        supabase.removeChannel(channelRef.current);
-      }
+      cleanupChannel();
     };
   }, []);
 
@@ -248,8 +262,8 @@ export default function PlayPage() {
           </h2>
           <p className="text-white/60">תודה ששיחקת ב-MegaClick!</p>
           <button
-            onClick={() => setStep('JOIN')}
-            className="px-6 py-3 rounded-xl bg-white/10 border border-white/20 text-sm font-bold"
+            onClick={resetToJoin}
+            className="px-6 py-3 rounded-xl bg-white/10 border border-white/20 text-sm font-bold cursor-pointer hover:bg-white/20 transition-all"
           >
             שחק שוב
           </button>
