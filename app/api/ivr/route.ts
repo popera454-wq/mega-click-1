@@ -13,9 +13,7 @@ export async function POST(req: Request) {
 function cleanPhone(p: string): string {
   if (!p) return "";
   let cleaned = p.replace(/\D/g, "");
-  if (cleaned.startsWith("972")) {
-    cleaned = "0" + cleaned.slice(3);
-  }
+  if (cleaned.startsWith("972")) cleaned = "0" + cleaned.slice(3);
   return cleaned;
 }
 
@@ -28,49 +26,42 @@ async function handleRequest(req: Request) {
     const url = new URL(req.url);
     const { searchParams } = url;
 
-    let apiPhone = "";
-    for (const [key, value] of searchParams.entries()) {
-      const k = key.toLowerCase();
-      if (k === "apiphone" || k === "api_phone" || k === "phone" || k === "apidid") {
-        apiPhone = value;
-        break;
-      }
-    }
+    // --- זיהוי מספר המתקשר ---
+    let apiPhone =
+      searchParams.get("phone") ||
+      searchParams.get("callerid") ||
+      searchParams.get("api_callerid") ||
+      searchParams.get("apidid") ||
+      searchParams.get("did") ||
+      searchParams.get("api_phone") ||
+      searchParams.get("apiphone") ||
+      "";
 
     const phone = cleanPhone(apiPhone);
 
-    if (!phone) {
+    if (!phone || phone.length < 9) {
       return new Response("id_list_message=f-שגיאה בזיהוי מספר הטלפון", {
         status: 200,
         headers: { "Content-Type": "text/plain; charset=utf-8" },
       });
     }
 
-    let inputPin = "";
-    let inputAns = "";
-    let inputRange = "";
+    // --- קבלת פרמטרים ---
+    const inputPin = (searchParams.get("q_pin") || "").trim();
+    const inputAns = (searchParams.get("q_ans") || "").trim();
+    const inputRange = (searchParams.get("q_range") || "").trim();
 
-    for (const [key, value] of searchParams.entries()) {
-      const k = key.toLowerCase();
-      if (k.includes("q_pin")) inputPin = value;
-      if (k.includes("q_ans")) inputAns = value;
-      if (k.includes("q_range")) inputRange = value;
-    }
-
-    inputPin = inputPin.trim();
-    inputAns = inputAns.trim();
-    inputRange = inputRange.trim();
-
+    // --- בדיקת סשן ---
     const { data: session } = await supabase
       .from("ivr_sessions")
       .select("pin, status")
       .eq("phone", phone)
       .maybeSingle();
 
-    const activePin = session?.pin ? String(session.pin) : null;
+    const activePin = session?.pin || null;
 
-    // --- שלב הזנת קוד משחק ---
-    if ((inputPin && inputPin !== activePin) || (!activePin && inputPin)) {
+    // --- התחברות למשחק ---
+    if (inputPin && inputPin !== activePin) {
       if (!/^\d{6}$/.test(inputPin)) {
         return makeIvrRead("קוד שגוי נא להקיש קוד בן 6 ספרות", "q_pin", 6, 6);
       }
@@ -81,7 +72,7 @@ async function handleRequest(req: Request) {
         .eq("pin", inputPin)
         .maybeSingle();
 
-      if (!game || String(game.status).toLowerCase() === "finished") {
+      if (!game || game.status === "finished") {
         return makeIvrRead("המשחק לא קיים או הסתיים נא להקיש קוד אחר", "q_pin", 6, 6);
       }
 
@@ -91,9 +82,10 @@ async function handleRequest(req: Request) {
       );
 
       await supabase.from("game_players").delete().eq("game_pin", inputPin).eq("phone", phone);
+
       await supabase.from("game_players").insert({
         game_pin: inputPin,
-        phone: phone,
+        phone,
         player_name: `טלפון ${phone.slice(-4)}`,
         score: 0,
       });
@@ -101,7 +93,7 @@ async function handleRequest(req: Request) {
       return makeIvrWait("התחברת בהצלחה ממתין להתחלת המשחק");
     }
 
-    // --- שחקן כבר מחובר ---
+    // --- שחקן מחובר ---
     if (activePin) {
       const { data: gameData } = await supabase
         .from("games")
@@ -109,12 +101,22 @@ async function handleRequest(req: Request) {
         .eq("pin", activePin)
         .maybeSingle();
 
-      if (!gameData || String(gameData.status).toLowerCase() === "finished") {
+      if (!gameData || gameData.status === "finished") {
         await supabase.from("ivr_sessions").delete().eq("phone", phone);
-        return makeIvrWait("המשחק הסתיים תודה רבה");
+
+        // חישוב מקום
+        const { data: players } = await supabase
+          .from("game_players")
+          .select("phone, score")
+          .eq("game_pin", activePin)
+          .order("score", { ascending: false });
+
+        const rank = players.findIndex((p) => p.phone === phone) + 1;
+
+        return makeIvrWait(`המשחק הסתיים הגעת למקום ${rank}`);
       }
 
-      if (String(gameData.status).toLowerCase() === "waiting") {
+      if (gameData.status === "waiting") {
         return makeIvrWait("ממתינים להתחלת המשחק");
       }
 
@@ -139,47 +141,40 @@ async function handleRequest(req: Request) {
         .eq("question_index", currentQIndex)
         .maybeSingle();
 
-      const submittedAnswer = qType === "range" ? inputRange : inputAns;
+      const submittedAnswer =
+        qType === "range" ? inputRange : inputAns;
 
       // --- קבלת תשובה ---
       if (submittedAnswer && !existingAnswer) {
         const answerTime = new Date();
-        let timeBonus = 1000;
 
-        if (gameData?.question_start_time) {
+        let timeBonus = 1000;
+        if (gameData.question_start_time) {
           const startTime = new Date(gameData.question_start_time).getTime();
-          const elapsedSeconds = Math.max(0, (answerTime.getTime() - startTime) / 1000);
-          const scoreFactor = Math.max(0, (timeLimit - elapsedSeconds) / timeLimit);
-          timeBonus = Math.round(500 + 500 * scoreFactor);
+          const elapsed = (answerTime.getTime() - startTime) / 1000;
+          const factor = Math.max(0, (timeLimit - elapsed) / timeLimit);
+          timeBonus = Math.round(500 + 500 * factor);
         }
 
         let isCorrect = false;
 
         if (qType === "range") {
           isCorrect = Number(submittedAnswer) === Number(questionData.correct_range_value);
+        } else if (qType === "true_false") {
+          isCorrect = Number(submittedAnswer) === Number(questionData.correct_option);
         } else {
           isCorrect = Number(submittedAnswer) === Number(questionData.correct_option);
         }
 
         const totalScore = (isCorrect ? 1000 : 0) + timeBonus;
 
-        let answerIndex: number | null = null;
-        let answerValue: string | null = null;
-
-        if (qType === "range") {
-          answerValue = String(submittedAnswer);
-        } else {
-          const numericAns = parseInt(submittedAnswer, 10);
-          if (!isNaN(numericAns)) answerIndex = numericAns;
-        }
-
         await supabase.from("game_answers").upsert(
           {
             game_pin: activePin,
-            phone: phone,
+            phone,
             question_index: currentQIndex,
-            answer_index: answerIndex,
-            answer_value: answerValue,
+            answer_index: qType === "range" ? null : Number(submittedAnswer),
+            answer_value: qType === "range" ? submittedAnswer : null,
             score_awarded: totalScore,
             created_at: answerTime.toISOString(),
           },
@@ -208,10 +203,23 @@ async function handleRequest(req: Request) {
         return makeIvrWait("ממתין לשאלה הבאה");
       }
 
-      if (qType === "range") {
-        return makeIvrRead("שאלת טווח הקש מספר וסיום בסולמית", "q_range", 1, 6, timeLimit);
-      } else {
-        return makeIvrRead("הקש את מספר התשובה", "q_ans", 1, 1, timeLimit);
+      // --- הצגת שאלה לפי סוג ---
+      switch (qType) {
+        case "single_choice":
+          return makeIvrRead("הקש את מספר התשובה", "q_ans", 1, 1, timeLimit);
+
+        case "multiple_correct":
+        case "poll":
+          return makeIvrRead("הקש את האפשרות שבחרת", "q_ans", 1, 1, timeLimit);
+
+        case "range":
+          return makeIvrRead("הקש מספר וסיים בסולמית", "q_range", 1, 6, timeLimit);
+
+        case "true_false":
+          return makeIvrRead("ענה נכון או לא נכון הקש 1 לנכון 2 ללא נכון", "q_ans", 1, 1, timeLimit);
+
+        default:
+          return makeIvrRead("הקש את מספר התשובה", "q_ans", 1, 1, timeLimit);
       }
     }
 
