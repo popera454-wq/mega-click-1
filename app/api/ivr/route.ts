@@ -27,6 +27,7 @@ async function handleRequest(req: Request) {
       searchParams.get("ApiDID") ||
       "";
     const phone = cleanPhone(rawPhone);
+
     const inputPin = String(
       searchParams.get("q_pin") || searchParams.get("val_name_q_pin") || ""
     ).trim();
@@ -37,10 +38,14 @@ async function handleRequest(req: Request) {
       searchParams.get("q_range") || searchParams.get("val_name_q_range") || ""
     ).trim();
 
+    // 1. במידה ולא נשלח טלפון - מבקשים קוד משחק
     if (!phone) {
-      return sendIvrResponse("read=t-שלום הקש את קוד המשחק=q_pin,no,6,6,10,Digits,no,no,");
+      return sendIvrResponse(
+        "read=t-ברוכים הבאים למערכת המשחק בלייב. נא להקיש את קוד המשחק בן 6 הספרות=q_pin,no,6,6,10,Digits,no,no,"
+      );
     }
 
+    // 2. בדיקת סשן פעיל
     const { data: session } = await supabase
       .from("ivr_sessions")
       .select("pin, status")
@@ -49,29 +54,34 @@ async function handleRequest(req: Request) {
 
     if (session?.status === "FINISHED") {
       await supabase.from("ivr_sessions").delete().eq("phone", phone);
-      return sendIvrResponse("read=t-המשחק הסתיים תודה ששיחקתם=q_dummy,no,0,0,3,Digits,no,no,");
+      return sendIvrResponse(
+        "read=t-המשחק הסתיים. תודה רבה ששיחקתם איתנו=q_dummy,no,0,0,1,Digits,no,no,"
+      );
     }
 
     const activePin = session?.pin ? String(session.pin) : null;
 
-    // === מקרה א': כניסה למשחק חדש ===
+    // === מקרה א': הקשת קוד משחק בכניסה ===
     if ((inputPin && inputPin !== activePin) || (!activePin && inputPin)) {
       if (!/^\d{6}$/.test(inputPin)) {
-        return sendIvrResponse("read=t-קוד לא תקין הקש קוד בן שש ספרות=q_pin,no,6,6,10,Digits,no,no,");
+        return sendIvrResponse(
+          "read=t-קוד לא תקין. נא להקיש קוד בן 6 ספרות=q_pin,no,6,6,10,Digits,no,no,"
+        );
       }
 
-      const { data: rawGames } = await supabase
+      const { data: game } = await supabase
         .from("games")
-        .select("id, pin, status");
+        .select("pin, status")
+        .eq("pin", inputPin)
+        .maybeSingle();
 
-      const validGame = rawGames?.find(
-        (g) => String(g.pin).trim() === inputPin && String(g.status).toLowerCase() !== "finished"
-      );
-
-      if (!validGame) {
-        return sendIvrResponse("read=t-משחק לא קיים או שהסתיים נסה שוב=q_pin,no,6,6,10,Digits,no,no,");
+      if (!game || String(game.status).toLowerCase() === "finished") {
+        return sendIvrResponse(
+          "read=t-המשחק לא קיים או שהסתיים. נסה קוד אחר=q_pin,no,6,6,10,Digits,no,no,"
+        );
       }
 
+      // שמירת סשן חדש
       await supabase.from("ivr_sessions").upsert(
         {
           phone,
@@ -82,6 +92,7 @@ async function handleRequest(req: Request) {
         { onConflict: "phone" }
       );
 
+      // רישום השחקן למשחק
       await supabase
         .from("game_players")
         .delete()
@@ -95,10 +106,13 @@ async function handleRequest(req: Request) {
         score: 0,
       });
 
-      return sendIvrResponse("read=t-התחברת בהצלחה הקש את מספר התשובה=q_ans,no,1,1,15,Digits,no,no,");
+      // הודעת פתיחה מיוחדת בלייב + מעבר ללולאת המתנה שקטה (q_wait)
+      return sendIvrResponse(
+        "read=t-ברוכים הבאים למערכת המשחק בלייב. חיבור בוצע בהצלחה. המתן לשאלה הראשונה=q_wait,no,1,1,2,Digits,no,no,"
+      );
     }
 
-    // === מקרה ב': משתמש מחובר ===
+    // === מקרה ב': משתמש מחובר - ניהול המשחק בלייב ===
     if (activePin) {
       const { data: gameData } = await supabase
         .from("games")
@@ -108,32 +122,45 @@ async function handleRequest(req: Request) {
 
       if (!gameData || String(gameData.status).toLowerCase() === "finished") {
         await supabase.from("ivr_sessions").delete().eq("phone", phone);
-        return sendIvrResponse("read=t-המשחק הסתיים תודה רבה=q_dummy,no,0,0,3,Digits,no,no,");
+        return sendIvrResponse(
+          "read=t-המשחק הסתיים. תודה רבה ששיחקתם איתנו=q_dummy,no,0,0,1,Digits,no,no,"
+        );
+      }
+
+      // המשחק עדיין לא התחיל על ידי המנהל
+      if (String(gameData.status).toLowerCase() === "waiting") {
+        return sendIvrResponse(
+          "read=t-ממתינים להתחלת המשחק=q_wait,no,1,1,3,Digits,no,no,"
+        );
       }
 
       const currentQIndex = gameData.current_question_index ?? 0;
 
-      // בדיקת סוג השאלה
+      // שליפת הנתונים וההגדרות של השאלה הנוכחית
       const { data: questionData } = await supabase
         .from("questions")
-        .select("question_type")
+        .select("question_type, digits_min, digits_max, time_limit")
         .eq("game_pin", activePin)
         .eq("question_index", currentQIndex)
         .maybeSingle();
 
       const qType = questionData?.question_type || "single_choice";
-      const submittedAnswer = qType === "range" ? inputRange : inputAns;
+      const digitsMin = questionData?.digits_min ?? 1;
+      const digitsMax = questionData?.digits_max ?? (qType === "range" ? 6 : 1);
+      const timeLimit = questionData?.time_limit ?? 30;
 
-      // בדיקה האם השחקן כבר ענה על השאלה הנוכחית
+      // בדיקה האם השחקן כבר ענה על השאלה הזו
       const { data: existingAnswer } = await supabase
         .from("game_answers")
-        .select("question_index")
+        .select("id")
         .eq("game_pin", activePin)
         .eq("phone", phone)
         .eq("question_index", currentQIndex)
         .maybeSingle();
 
-      // אם המשתמש שלח תשובה עכשיו
+      const submittedAnswer = qType === "range" ? inputRange : inputAns;
+
+      // 1. במידה והתקבלה תשובה חדשה עכשיו
       if (submittedAnswer && !existingAnswer) {
         const answerTime = new Date();
         let timeBonus = 1000;
@@ -141,7 +168,6 @@ async function handleRequest(req: Request) {
         if (gameData?.question_start_time) {
           const startTime = new Date(gameData.question_start_time).getTime();
           const elapsedSeconds = Math.max(0, (answerTime.getTime() - startTime) / 1000);
-          const timeLimit = 30;
           const scoreFactor = Math.max(0, (timeLimit - elapsedSeconds) / timeLimit);
           timeBonus = Math.round(500 + 500 * scoreFactor);
         }
@@ -158,7 +184,7 @@ async function handleRequest(req: Request) {
           }
         }
 
-        // שמירת התשובה עם זמן הלחיצה המדויק
+        // שמירת התשובה במדויק
         await supabase.from("game_answers").upsert(
           {
             game_pin: activePin,
@@ -172,29 +198,61 @@ async function handleRequest(req: Request) {
           { onConflict: "game_pin,phone,question_index" }
         );
 
-        // הודעה שקטה/קצרה שלא מבקשת שוב קלט אלא מעבירה למצב המתנה לשאלה הבאה
-        return sendIvrResponse("id_list_message=t-התשובה נקלטה בהצלחה. המתן לשאלה הבאה");
+        // עדכון הניקוד הכולל של השחקן
+        const { data: player } = await supabase
+          .from("game_players")
+          .select("score")
+          .eq("game_pin", activePin)
+          .eq("phone", phone)
+          .maybeSingle();
+
+        if (player) {
+          await supabase
+            .from("game_players")
+            .update({ score: (player.score || 0) + timeBonus })
+            .eq("game_pin", activePin)
+            .eq("phone", phone);
+        }
+
+        // השמעת אישור ומעבר מידי ללולאת המתנה שקטה לשאלה הבאה
+        return sendIvrResponse(
+          "read=t-התשובה נקלטה בהצלחה. המתן לשאלה הבאה=q_wait,no,1,1,2,Digits,no,no,"
+        );
       }
 
-      // אם כבר ענה בעבר על השאלה הנוכחית – לא מציקים לו ולא שואלים שוב, רק מחכים בסבלנות בשקט
+      // 2. במידה והמשתמש כבר ענה בעבר על השאלה הנוכחית - נשאר בלולאת המתנה שקטה
       if (existingAnswer) {
-        return sendIvrResponse("id_list_message=t-התשובה כבר נקלטה. ממתין לשאלה הבאה");
+        return sendIvrResponse(
+          "read=t-התשובה נקלטה. ממתין לשאלה הבאה=q_wait,no,1,1,3,Digits,no,no,"
+        );
       }
 
-      // אם טרם ענה - נציג את השאלה פעם אחת בלבד עם זמן השהייה ארוך (20 שניות) למניעת קריאות חוזרות ונשנות
+      // 3. השחקן טרם ענה - משמיעים את הנחיית ההקשה לפי סוג השאלה
       if (qType === "range") {
-        return sendIvrResponse("read=t-הקש את המספר הרצוי וסיום בסולמית=q_range,no,1,6,20,Digits,no,no,");
+        return sendIvrResponse(
+          `read=t-שאלת טווח. הקש את המספר וסיום בסולמית=q_range,no,${digitsMin},${digitsMax},${timeLimit},Digits,no,no,`
+        );
       } else if (qType === "poll") {
-        return sendIvrResponse("read=t-שאלת סקר הקש את מספר התשובה=q_ans,no,1,1,20,Digits,no,no,");
+        return sendIvrResponse(
+          `read=t-שאלת סקר. הקש את מספר התשובה=q_ans,no,1,1,${timeLimit},Digits,no,no,`
+        );
       } else {
-        return sendIvrResponse("read=t-הקש את מספר התשובה=q_ans,no,1,1,20,Digits,no,no,");
+        return sendIvrResponse(
+          `read=t-הקש את מספר התשובה=q_ans,no,1,1,${timeLimit},Digits,no,no,`
+        );
       }
     }
 
-    return sendIvrResponse("read=t-ברוכים הבאים הקש את קוד המשחק=q_pin,no,6,6,10,Digits,no,no,");
+    // ברירת מחדל - הקשת קוד
+    return sendIvrResponse(
+      "read=t-ברוכים הבאים למערכת המשחק בלייב. נא להקיש את קוד המשחק=q_pin,no,6,6,10,Digits,no,no,"
+    );
   } catch (err) {
     console.error("IVR Error:", err);
-    return sendIvrResponse("read=t-אירעה שגיאה הקש את קוד המשחק=q_pin,no,6,6,10,Digits,no,no,");
+    // מניעת ה"אין שלוחה" - החזרת תשובה תקינה לימות המשיח גם בעת שגיאה בשרת
+    return sendIvrResponse(
+      "read=t-אנא המתן למערכת=q_wait,no,1,1,3,Digits,no,no,"
+    );
   }
 }
 
