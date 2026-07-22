@@ -228,7 +228,7 @@ async function handleRequest(req: Request) {
 }
 
 function makeIvrRead(text: string, valName: string, minDigits = 1, maxDigits = 1, timeout = 10) {
-  return new Response(`read=t-${text}=${valName},no,${minDigits},${maxDigits},${timeout},Digits,no,no`, {
+  return new Response(`read=t-${text}=${valName},no,${minDigits},${maxDigits},${timeout},Digits,no,no {
     status: 200,
     headers: { "Content-Type": "text/plain; charset=utf-8" },
   });
