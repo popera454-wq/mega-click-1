@@ -3,229 +3,297 @@
 import React, { useState } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
-import { supabase } from '@/lib/supabase';
+import { createClientComponentClient } from '@supabase/auth-helpers-nextjs';
 
 export default function LoginPage() {
-  const router = useRouter();
   const [isSignUp, setIsSignUp] = useState(false);
-
-  // Form states
+  const [isForgotPassword, setIsForgotPassword] = useState(false);
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
-  const [fullName, setFullName] = useState('');
-
-  // UI states
+  const [errorMsg, setErrorMsg] = useState('');
+  const [successMsg, setSuccessMsg] = useState('');
   const [loading, setLoading] = useState(false);
-  const [errorMessage, setErrorMessage] = useState<string | null>(null);
-  const [successMessage, setSuccessMessage] = useState<string | null>(null);
 
-  // Submit Handler
-  const handleSubmit = async (e: React.FormEvent) => {
+  const router = useRouter();
+  const supabase = createClientComponentClient();
+
+  // Handle Email/Password Login or Sign Up
+  const handleAuth = async (e: React.FormEvent) => {
     e.preventDefault();
+    setErrorMsg('');
+    setSuccessMsg('');
     setLoading(true);
-    setErrorMessage(null);
-    setSuccessMessage(null);
 
-    try {
-      if (isSignUp) {
-        // הרשמה ל-Supabase Auth
-        const { data, error } = await supabase.auth.signUp({
-          email,
-          password,
-          options: {
-            data: {
-              full_name: fullName,
-            },
-          },
-        });
-
-        if (error) throw error;
-
-        // אם מוגדר אישור אימייל ב-Supabase
-        if (data?.user && data.session === null) {
-          setSuccessMessage(
-            'הרשמה בוצעה בהצלחה! אנא בדוק את תיבת הדוא"ל שלך לאישור החשבון.'
-          );
-        } else {
-          setSuccessMessage('נרשמת בהצלחה! מעביר אותך ללוח הבקרה...');
-          setTimeout(() => router.push('/dashboard'), 1500);
-        }
+    if (isForgotPassword) {
+      const { error } = await supabase.auth.resetPasswordForEmail(email, {
+        redirectTo: `${window.location.origin}/login`,
+      });
+      if (error) {
+        setErrorMsg(error.message);
       } else {
-        // התחברות ל-Supabase Auth
-        const { error } = await supabase.auth.signInWithPassword({
-          email,
-          password,
-        });
-
-        if (error) throw error;
-
-        router.push('/dashboard');
+        setSuccessMsg('קישור לאיפוס סיסמה נשלח אל המייל שלך!');
       }
-    } catch (err: any) {
-      // תרגום שגיאות שכיחות לעברית
-      let message = err.message || 'אירעה שגיאה בתהליך. אנא נסה שנית.';
-      if (message.includes('Invalid login credentials')) {
-        message = 'אימייל או סיסמה שגויים.';
-      } else if (message.includes('User already registered')) {
-        message = 'משתמש עם כתובת אימייל זו כבר קיים במערכת.';
-      } else if (message.includes('Password should be at least')) {
-        message = 'הסיסמה חייבת להכיל לפחות 6 תווים.';
+      setLoading(false);
+      return;
+    }
+
+    if (isSignUp) {
+      const { error } = await supabase.auth.signUp({
+        email,
+        password,
+        options: {
+          emailRedirectTo: `${window.location.origin}/login`,
+        },
+      });
+      if (error) {
+        setErrorMsg(error.message);
+      } else {
+        setSuccessMsg('נרשמת בהצלחה! בדוק את תיבת המייל שלך לאישור החשבון.');
       }
-      setErrorMessage(message);
-    } finally {
+    } else {
+      const { error } = await supabase.auth.signInWithPassword({
+        email,
+        password,
+      });
+      if (error) {
+        setErrorMsg(error.message);
+      } else {
+        router.push('/dashboard'); // או עמוד הניהול שלך
+        router.refresh();
+      }
+    }
+    setLoading(false);
+  };
+
+  // Handle Google OAuth Login
+  const handleGoogleLogin = async () => {
+    setErrorMsg('');
+    setLoading(true);
+    const { error } = await supabase.auth.signInWithOAuth({
+      provider: 'google',
+      options: {
+        redirectTo: `${window.location.origin}/dashboard`,
+      },
+    });
+    if (error) {
+      setErrorMsg(error.message);
       setLoading(false);
     }
   };
 
   return (
-    <main className="min-h-screen grid-bg bg-[#0d041e] text-white flex flex-col justify-center items-center px-4 py-12 dir-rtl">
-      {/* Header / Logo */}
-      <div className="mb-8 text-center">
-        <Link href="/" className="inline-flex items-center gap-2 mb-3">
-          <div className="grid h-12 w-12 place-items-center rounded-2xl bg-gradient-to-tr from-fuchsia-500 to-violet-500 text-white shadow-lg shadow-fuchsia-500/30">
-            <svg
-              className="w-6 h-6 animate-pulse"
-              fill="none"
-              stroke="currentColor"
-              viewBox="0 0 24 24"
-            >
-              <path
-                strokeLinecap="round"
-                strokeLinejoin="round"
-                strokeWidth={2}
-                d="M5 3v4M3 5h4M6 17v4m-2-2h4m5-16l2.286 6.857L21 12l-5.714 2.143L13 21l-2.286-6.857L5 12l5.714-2.143L13 3z"
-              />
-            </svg>
+    <main className="min-h-screen grid-bg bg-[#0d041e] text-white dir-rtl flex flex-col justify-between selection:bg-fuchsia-500 selection:text-white relative overflow-hidden">
+      {/* Ambient background glows */}
+      <div className="absolute top-1/4 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[600px] h-[600px] bg-fuchsia-600/10 rounded-full blur-[140px] pointer-events-none -z-10" />
+
+      {/* Header */}
+      <header className="flex items-center justify-between border-b border-white/10 bg-[#0d041e]/80 px-6 py-4 backdrop-blur-xl md:px-16 z-20">
+        <Link href="/" className="flex items-center gap-3 group">
+          <div className="grid h-10 w-10 place-items-center rounded-xl bg-gradient-to-tr from-fuchsia-500 to-violet-500 text-white shadow-lg shadow-fuchsia-500/30 group-hover:scale-105 transition-transform">
+            ✦
           </div>
-          <span className="text-3xl font-black bg-gradient-to-r from-fuchsia-300 via-pink-200 to-white bg-clip-text text-transparent">
+          <span className="text-2xl font-black bg-gradient-to-r from-fuchsia-300 via-pink-200 to-white bg-clip-text text-transparent">
             MegaClick
           </span>
         </Link>
-        <p className="text-white/60 font-light text-sm md:text-base">
-          {isSignUp
-            ? 'צור חשבון חדש והתחל ליצור חידונים'
-            : 'התחבר לחשבון שלך כדי לנהל את המשחקים'}
-        </p>
-      </div>
+        <Link
+          href="/"
+          className="text-sm font-medium text-white/70 hover:text-white transition-colors flex items-center gap-1.5"
+        >
+          ← חזרה לדף הבית
+        </Link>
+      </header>
 
-      {/* Auth Card */}
-      <div className="w-full max-w-md glass neon rounded-3xl p-8 backdrop-blur-xl border border-white/10 relative overflow-hidden">
-        {/* Toggle Sign In / Sign Up */}
-        <div className="flex bg-white/5 p-1 rounded-xl mb-6 border border-white/10">
-          <button
-            type="button"
-            onClick={() => {
-              setIsSignUp(false);
-              setErrorMessage(null);
-              setSuccessMessage(null);
-            }}
-            className={`flex-1 py-2.5 text-sm font-bold rounded-lg transition-all ${
-              !isSignUp
-                ? 'bg-gradient-to-r from-fuchsia-500 to-violet-600 text-white shadow-md'
-                : 'text-white/60 hover:text-white'
-            }`}
-          >
-            התחברות
-          </button>
-          <button
-            type="button"
-            onClick={() => {
-              setIsSignUp(true);
-              setErrorMessage(null);
-              setSuccessMessage(null);
-            }}
-            className={`flex-1 py-2.5 text-sm font-bold rounded-lg transition-all ${
-              isSignUp
-                ? 'bg-gradient-to-r from-fuchsia-500 to-violet-600 text-white shadow-md'
-                : 'text-white/60 hover:text-white'
-            }`}
-          >
-            הרשמה
-          </button>
-        </div>
-
-        {/* Feedback Alerts */}
-        {errorMessage && (
-          <div className="mb-5 p-4 rounded-xl bg-red-500/10 border border-red-500/30 text-red-200 text-sm font-medium">
-            ⚠️ {errorMessage}
-          </div>
-        )}
-
-        {successMessage && (
-          <div className="mb-5 p-4 rounded-xl bg-emerald-500/10 border border-emerald-500/30 text-emerald-200 text-sm font-medium">
-            ✅ {successMessage}
-          </div>
-        )}
-
-        {/* Auth Form */}
-        <form onSubmit={handleSubmit} className="space-y-4">
-          {isSignUp && (
-            <div>
-              <label className="block text-xs font-bold text-white/80 mb-1">
-                שם מלא
-              </label>
-              <input
-                type="text"
-                required
-                value={fullName}
-                onChange={(e) => setFullName(e.target.value)}
-                placeholder="ישראל ישראלי"
-                className="w-full px-4 py-3 rounded-xl bg-white/5 border border-white/10 text-white placeholder-white/30 focus:outline-none focus:border-fuchsia-400 focus:ring-1 focus:ring-fuchsia-400 transition-all text-sm"
-              />
+      {/* Auth Card Container */}
+      <div className="flex-1 flex items-center justify-center px-4 py-12 z-10">
+        <div className="w-full max-w-md">
+          <div className="glass neon rounded-[2.5rem] p-8 md:p-10 border border-white/10 shadow-2xl relative">
+            
+            {/* Top Icon / Title */}
+            <div className="text-center mb-8">
+              <h1 className="text-3xl font-black tracking-tight mb-2">
+                {isForgotPassword
+                  ? 'איפוס סיסמה'
+                  : isSignUp
+                  ? 'יצירת חשבון חדש'
+                  : 'ברוכים השבים!'}
+              </h1>
+              <p className="text-sm text-white/60 font-light">
+                {isForgotPassword
+                  ? 'הזן את המייל שלך ונשלח לך קישור לאיפוס הסיסמה'
+                  : isSignUp
+                  ? 'הירשם כדי להתחיל ליצור ולנהל חידונים בלייב'
+                  : 'התחבר למערכת הניהול של משחקי הטריוויה שלך'}
+              </p>
             </div>
-          )}
 
-          <div>
-            <label className="block text-xs font-bold text-white/80 mb-1">
-              דואל
-            </label>
-            <input
-              type="email"
-              required
-              value={email}
-              onChange={(e) => setEmail(e.target.value)}
-              placeholder="your@email.com"
-              className="w-full px-4 py-3 rounded-xl bg-white/5 border border-white/10 text-white placeholder-white/30 focus:outline-none focus:border-fuchsia-400 focus:ring-1 focus:ring-fuchsia-400 transition-all text-sm dir-ltr text-right"
-            />
-          </div>
-
-          <div>
-            <label className="block text-xs font-bold text-white/80 mb-1">
-              סיסמה
-            </label>
-            <input
-              type="password"
-              required
-              minLength={6}
-              value={password}
-              onChange={(e) => setPassword(e.target.value)}
-              placeholder="••••••••"
-              className="w-full px-4 py-3 rounded-xl bg-white/5 border border-white/10 text-white placeholder-white/30 focus:outline-none focus:border-fuchsia-400 focus:ring-1 focus:ring-fuchsia-400 transition-all text-sm dir-ltr text-right"
-            />
-          </div>
-
-          <button
-            type="submit"
-            disabled={loading}
-            className="w-full mt-2 py-3.5 px-6 rounded-xl font-bold bg-gradient-to-r from-fuchsia-500 to-violet-600 hover:from-fuchsia-400 hover:to-violet-500 text-white shadow-lg shadow-fuchsia-500/25 transition-all duration-200 active:scale-[0.98] disabled:opacity-50 disabled:cursor-not-allowed text-base flex justify-center items-center gap-2"
-          >
-            {loading ? (
-              <span className="inline-block w-5 h-5 border-2 border-white/30 border-t-white rounded-full animate-spin" />
-            ) : isSignUp ? (
-              'צור חשבון'
-            ) : (
-              'התחבר'
+            {/* Error / Success Messages */}
+            {errorMsg && (
+              <div className="mb-6 p-4 rounded-2xl bg-red-500/10 border border-red-500/30 text-red-200 text-sm text-center">
+                {errorMsg}
+              </div>
             )}
-          </button>
-        </form>
+            {successMsg && (
+              <div className="mb-6 p-4 rounded-2xl bg-emerald-500/10 border border-emerald-500/30 text-emerald-200 text-sm text-center">
+                {successMsg}
+              </div>
+            )}
 
-        {/* Footer Link */}
-        <div className="mt-6 text-center text-xs text-white/50">
-          <Link href="/" className="hover:text-fuchsia-300 transition-colors">
-            ← חזרה לעמוד הבית
-          </Link>
+            {/* Google Login Button (Shown unless in forgot password mode) */}
+            {!isForgotPassword && (
+              <>
+                <button
+                  onClick={handleGoogleLogin}
+                  disabled={loading}
+                  type="button"
+                  className="w-full flex items-center justify-center gap-3 py-3.5 px-6 rounded-2xl bg-white/5 hover:bg-white/10 border border-white/10 font-bold transition-all duration-300 active:scale-95 shadow-md mb-6 text-sm"
+                >
+                  <svg className="w-5 h-5" viewBox="0 0 24 24">
+                    <path
+                      fill="#EA4335"
+                      d="M12 5c1.6 0 3 .6 4.1 1.6l3.1-3.1C17.3 1.8 14.8 1 12 1 7.4 1 3.5 3.6 1.6 7.4l3.7 2.9C6.2 7.3 8.9 5 12 5z"
+                    />
+                    <path
+                      fill="#4285F4"
+                      d="M23.5 12.3c0-.8-.1-1.6-.2-2.3H12v4.5h6.5c-.3 1.5-1.1 2.8-2.4 3.7l3.7 2.9c2.2-2 3.7-5 3.7-8.8z"
+                    />
+                    <path
+                      fill="#FBBC05"
+                      d="M5.3 14.7c-.2-.7-.4-1.5-.4-2.7s.2-2 .4-2.7L1.6 6.4C.6 8.4 0 10.6 0 13s.6 4.6 1.6 6.6l3.7-2.9z"
+                    />
+                    <path
+                      fill="#34A853"
+                      d="M12 23c3.2 0 6-1.1 8-3l-3.7-2.9c-1.1.7-2.5 1.2-4.3 1.2-3.1 0-5.8-2.3-6.7-5.3L1.6 15.9C3.5 19.7 7.4 23 12 23z"
+                    />
+                  </svg>
+                  התחברות באמצעות Google
+                </button>
+
+                <div className="flex items-center my-6 text-white/30 text-xs">
+                  <div className="flex-1 border-t border-white/10" />
+                  <span className="px-3">או באמצעות אימייל</span>
+                  <div className="flex-1 border-t border-white/10" />
+                </div>
+              </>
+            )}
+
+            {/* Email/Password Form */}
+            <form onSubmit={handleAuth} className="space-y-4">
+              <div>
+                <label className="block text-xs font-bold text-white/70 mb-1.5">
+                  כתובת אימייל
+                </label>
+                <input
+                  type="email"
+                  required
+                  value={email}
+                  onChange={(e) => setEmail(e.target.value)}
+                  placeholder="name@example.com"
+                  className="w-full rounded-2xl bg-white/5 border border-white/10 px-4 py-3.5 text-white placeholder-white/30 focus:outline-none focus:border-fuchsia-500 focus:ring-1 focus:ring-fuchsia-500 transition-all text-sm"
+                />
+              </div>
+
+              {!isForgotPassword && (
+                <div>
+                  <div className="flex items-center justify-between mb-1.5">
+                    <label className="block text-xs font-bold text-white/70">
+                      סיסמה
+                    </label>
+                    {!isSignUp && (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setIsForgotPassword(true);
+                          setErrorMsg('');
+                          setSuccessMsg('');
+                        }}
+                        className="text-xs text-fuchsia-400 hover:text-fuchsia-300 transition-colors"
+                      >
+                        שכחת סיסמה?
+                      </button>
+                    )}
+                  </div>
+                  <input
+                    type="password"
+                    required
+                    value={password}
+                    onChange={(e) => setPassword(e.target.value)}
+                    placeholder="••••••••"
+                    className="w-full rounded-2xl bg-white/5 border border-white/10 px-4 py-3.5 text-white placeholder-white/30 focus:outline-none focus:border-fuchsia-500 focus:ring-1 focus:ring-fuchsia-500 transition-all text-sm"
+                  />
+                </div>
+              )}
+
+              <button
+                type="submit"
+                disabled={loading}
+                className="w-full mt-2 py-4 px-6 rounded-2xl bg-gradient-to-r from-fuchsia-500 to-violet-600 text-white font-bold hover:from-fuchsia-400 hover:to-violet-500 shadow-lg shadow-fuchsia-500/30 transition-all duration-300 active:scale-95 disabled:opacity-50 text-base"
+              >
+                {loading
+                  ? 'טוען...'
+                  : isForgotPassword
+                  ? 'שלח קישור לאיפוס'
+                  : isSignUp
+                  ? 'צור חשבון'
+                  : 'התחברות'}
+              </button>
+            </form>
+
+            {/* Toggle Modes Footer */}
+            <div className="mt-8 text-center text-sm">
+              {isForgotPassword ? (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setIsForgotPassword(false);
+                    setErrorMsg('');
+                    setSuccessMsg('');
+                  }}
+                  className="text-fuchsia-400 hover:text-fuchsia-300 font-bold transition-colors"
+                >
+                  ← חזרה למסך ההתחברות
+                </button>
+              ) : isSignUp ? (
+                <p className="text-white/60">
+                  כבר יש לך חשבון?{' '}
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setIsSignUp(false);
+                      setErrorMsg('');
+                      setSuccessMsg('');
+                    }}
+                    className="text-fuchsia-400 hover:text-fuchsia-300 font-bold transition-colors underline"
+                  >
+                    התחבר כאן
+                  </button>
+                </p>
+              ) : (
+                <p className="text-white/60">
+                  אין לך חשבון עדיין?{' '}
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setIsSignUp(true);
+                      setErrorMsg('');
+                      setSuccessMsg('');
+                    }}
+                    className="text-fuchsia-400 hover:text-fuchsia-300 font-bold transition-colors underline"
+                  >
+                    הירשם בחינם
+                  </button>
+                </p>
+              )}
+            </div>
+
+          </div>
         </div>
       </div>
+
+      {/* Footer */}
+      <footer className="border-t border-white/10 py-6 text-center text-xs text-white/40 z-20">
+        <p>© {new Date().getFullYear()} MegaClick. כל הזכויות שמורות.</p>
+      </footer>
     </main>
   );
 }
