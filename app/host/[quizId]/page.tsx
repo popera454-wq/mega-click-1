@@ -17,8 +17,9 @@ interface Player {
   id: string;
   name: string;
   score: number;
+  isPhone?: boolean;
+  phone?: string;
   lastAnswerIndex?: number;
-  lastAnswerTime?: number;
 }
 
 type GameState =
@@ -36,19 +37,16 @@ export default function HostGamePage({
   const quizId = params.quizId;
   const router = useRouter();
 
-  // Game Identifiers
   const [pinCode] = useState(() =>
     Math.floor(100000 + Math.random() * 900000).toString()
   );
   const [gameState, setGameState] = useState<GameState>('LOBBY');
 
-  // Data
   const [quizTitle, setQuizTitle] = useState('');
   const [questions, setQuestions] = useState<Question[]>([]);
   const [currentQuestionIndex, setCurrentQuestionIndex] = useState(0);
   const [players, setPlayers] = useState<Player[]>([]);
 
-  // Timer & Answers
   const [timeLeft, setTimeLeft] = useState(20);
   const [answersCount, setAnswersCount] = useState(0);
   const [loading, setLoading] = useState(true);
@@ -56,18 +54,15 @@ export default function HostGamePage({
   const channelRef = useRef<any>(null);
   const timerRef = useRef<any>(null);
 
-  // 1. הטענת מידע על החידון
+  // 1. טעינת ה חידון
   useEffect(() => {
     const initHost = async () => {
-      const {
-        data: { user },
-      } = await supabase.auth.getUser();
+      const { data: { user } } = await supabase.auth.getUser();
       if (!user) {
         router.push('/login');
         return;
       }
 
-      // טעינת שם החידון והשאלות
       const { data: quizData } = await supabase
         .from('quizzes')
         .select('title')
@@ -88,68 +83,47 @@ export default function HostGamePage({
     initHost();
   }, [quizId, router]);
 
-  // 2. הגדרת ערוץ תקשורת בזמן אמת (Realtime Broadcast & Presence)
+  // 2. האזנה משולבת: Presence (אתר) + Postgres Realtime (טלפונים)
   useEffect(() => {
     if (loading || questions.length === 0) return;
 
+    // ערוץ Broadcast & Presence לאתר
     const channel = supabase.channel(`game_${pinCode}`, {
       config: { presence: { key: 'host' } },
     });
 
-    // מעקב אחר שחקנים שמצטרפים
+    // א. שחקני אתר מגיעים מ-Presence
     channel.on('presence', { event: 'sync' }, () => {
       const state = channel.presenceState();
-      const joinedPlayers: Player[] = [];
+      const webPlayers: Player[] = [];
 
       Object.keys(state).forEach((key) => {
         if (key !== 'host') {
           const presences = state[key] as any[];
           if (presences.length > 0) {
-            joinedPlayers.push({
+            webPlayers.push({
               id: key,
               name: presences[0].name || 'שחקן',
               score: presences[0].score || 0,
+              isPhone: false,
             });
           }
         }
       });
 
       setPlayers((prev) => {
-        // שמירת ניקוד קודם של שחקנים קיימים
-        return joinedPlayers.map((p) => {
+        const phonePlayers = prev.filter((p) => p.isPhone);
+        const mergedWeb = webPlayers.map((p) => {
           const existing = prev.find((prevP) => prevP.id === p.id);
           return existing ? { ...p, score: existing.score } : p;
         });
+        return [...phonePlayers, ...mergedWeb];
       });
     });
 
-    // קבלת תשובות משחקנים בלייב
+    // ב. תשובות שחקני אתר
     channel.on('broadcast', { event: 'SUBMIT_ANSWER' }, ({ payload }) => {
-      const { playerId, answerIndex, timeTaken } = payload;
-      const currentQ = questions[currentQuestionIndex];
-
-      setPlayers((prevPlayers) => {
-        return prevPlayers.map((p) => {
-          if (p.id === playerId) {
-            const isCorrect = answerIndex === currentQ.correct_option;
-            // חישוב ניקוד: עד 1000 נקודות לפי מהירות התשובה
-            const bonus = isCorrect
-              ? Math.max(
-                  200,
-                  Math.round(1000 * (1 - timeTaken / currentQ.time_limit))
-                )
-              : 0;
-            return {
-              ...p,
-              score: p.score + bonus,
-              lastAnswerIndex: answerIndex,
-            };
-          }
-          return p;
-        });
-      });
-
-      setAnswersCount((prev) => prev + 1);
+      handleAnswerSubmitted(payload.playerId, payload.answerIndex, payload.timeTaken);
     });
 
     channel.subscribe(async (status) => {
@@ -160,12 +134,87 @@ export default function HostGamePage({
 
     channelRef.current = channel;
 
+    // ג. שחקני טלפון מגיעים ב-Realtime מה-DB (טבלת game_players)
+    const dbChannel = supabase
+      .channel(`db_players_${pinCode}`)
+      .on(
+        'postgres_changes',
+        {
+          event: 'INSERT',
+          schema: 'public',
+          table: 'game_players',
+          filter: `game_pin=eq.${pinCode}`,
+        },
+        (payload) => {
+          const newPhonePlayer = payload.new;
+          setPlayers((prev) => {
+            if (prev.some((p) => p.id === `phone_${newPhonePlayer.phone}`)) return prev;
+            return [
+              ...prev,
+              {
+                id: `phone_${newPhonePlayer.phone}`,
+                name: newPhonePlayer.player_name || `טלפון ${newPhonePlayer.phone.slice(-4)}`,
+                phone: newPhonePlayer.phone,
+                score: 0,
+                isPhone: true,
+              },
+            ];
+          }
+          );
+        }
+      )
+      // ד. תשובות שחקני טלפון מגיעות מ-game_answers
+      .on(
+        'postgres_changes',
+        {
+          event: 'INSERT',
+          schema: 'public',
+          table: 'game_answers',
+          filter: `game_pin=eq.${pinCode}`,
+        },
+        (payload) => {
+          const ans = payload.new;
+          const playerId = `phone_${ans.phone}`;
+          handleAnswerSubmitted(playerId, ans.answer_index, 5); // ממוצע 5 שניות לטלפון
+        }
+      )
+      .subscribe();
+
     return () => {
       supabase.removeChannel(channel);
+      supabase.removeChannel(dbChannel);
     };
   }, [pinCode, loading, questions, currentQuestionIndex]);
 
-  // 3. מנגנון טיימר לשאלה
+  // פונקציית חישוב תשובות אחידה (גם לאתר וגם לטלפון)
+  const handleAnswerSubmitted = (playerId: string, answerIndex: number, timeTaken: number) => {
+    const currentQ = questions[currentQuestionIndex];
+
+    setPlayers((prevPlayers) => {
+      return prevPlayers.map((p) => {
+        if (p.id === playerId) {
+          if (p.lastAnswerIndex !== undefined) return p; // מניעת תשובה כפולה באותה שאלה
+          const isCorrect = answerIndex === currentQ.correct_option;
+          const bonus = isCorrect
+            ? Math.max(
+                200,
+                Math.round(1000 * (1 - timeTaken / (currentQ.time_limit || 20)))
+              )
+            : 0;
+          return {
+            ...p,
+            score: p.score + bonus,
+            lastAnswerIndex: answerIndex,
+          };
+        }
+        return p;
+      });
+    });
+
+    setAnswersCount((prev) => prev + 1);
+  };
+
+  // מנגנון הטיימר
   useEffect(() => {
     if (gameState === 'QUESTION' && timeLeft > 0) {
       timerRef.current = setInterval(() => {
@@ -178,7 +227,6 @@ export default function HostGamePage({
     return () => clearInterval(timerRef.current);
   }, [gameState, timeLeft]);
 
-  // סיום זמן השאלה או הגשת תשובות מכולם
   useEffect(() => {
     if (
       gameState === 'QUESTION' &&
@@ -189,7 +237,6 @@ export default function HostGamePage({
     }
   }, [answersCount, players.length, gameState]);
 
-  // התחלת המשחק
   const startGame = () => {
     if (players.length === 0) {
       alert('יש להמתין לפחות לשחקן אחד לפני התחלת המשחק!');
@@ -198,14 +245,15 @@ export default function HostGamePage({
     startQuestion(0);
   };
 
-  // התחלת שאלה ספציפית
   const startQuestion = (index: number) => {
     setCurrentQuestionIndex(index);
     setAnswersCount(0);
     setTimeLeft(questions[index].time_limit || 20);
     setGameState('QUESTION');
 
-    // שידור לכל השחקנים שהשאלה התחילה
+    // איפוס תשובות קודמות
+    setPlayers((prev) => prev.map((p) => ({ ...p, lastAnswerIndex: undefined })));
+
     channelRef.current?.send({
       type: 'broadcast',
       event: 'QUESTION_START',
@@ -218,7 +266,6 @@ export default function HostGamePage({
     });
   };
 
-  // סיום שאלה ומעבר למסך תוצאות
   const endQuestion = () => {
     clearInterval(timerRef.current);
     setGameState('SHOW_RESULT');
@@ -234,12 +281,8 @@ export default function HostGamePage({
     });
   };
 
-  // מעבר לטבלת מובילים
-  const showLeaderboard = () => {
-    setGameState('LEADERBOARD');
-  };
+  const showLeaderboard = () => setGameState('LEADERBOARD');
 
-  // מעבר לשאלה הבאה או סיום
   const nextQuestion = () => {
     if (currentQuestionIndex + 1 < questions.length) {
       startQuestion(currentQuestionIndex + 1);
@@ -265,9 +308,6 @@ export default function HostGamePage({
     return (
       <main className="min-h-screen grid-bg bg-[#0d041e] text-white flex flex-col justify-center items-center gap-4 dir-rtl p-6 text-center">
         <h2 className="text-2xl font-bold">לא נמצאו שאלות בחידון זה!</h2>
-        <p className="text-white/60">
-          יש להוסיף שאלות בלוח הבקרה לפני הפעלת המשחק.
-        </p>
         <Link
           href={`/dashboard/quiz/${quizId}`}
           className="px-6 py-3 rounded-xl bg-fuchsia-500 font-bold"
@@ -283,7 +323,6 @@ export default function HostGamePage({
 
   return (
     <main className="min-h-screen grid-bg bg-[#0d041e] text-white dir-rtl flex flex-col justify-between p-6 md:p-10 select-none">
-      {/* Top Bar */}
       <header className="flex items-center justify-between border-b border-white/10 pb-4">
         <div>
           <h1 className="text-2xl font-black text-fuchsia-300">{quizTitle}</h1>
@@ -292,37 +331,31 @@ export default function HostGamePage({
 
         <div className="flex items-center gap-4">
           <div className="bg-white/10 px-6 py-2 rounded-2xl border border-white/20 text-center">
-            <span className="text-xs text-white/60 block">
-              קוד הצטרפות PIN:
-            </span>
+            <span className="text-xs text-white/60 block">קוד הצטרפות PIN:</span>
             <span className="text-3xl font-black tracking-widest text-fuchsia-400">
               {pinCode}
             </span>
           </div>
-          <Link
-            href="/dashboard"
-            className="text-xs text-white/40 hover:text-white"
-          >
+          <Link href="/dashboard" className="text-xs text-white/40 hover:text-white">
             יציאה
           </Link>
         </div>
       </header>
 
-      {/* 1. LOBBY STATE */}
+      {/* LOBBY STATE */}
       {gameState === 'LOBBY' && (
         <div className="max-w-4xl mx-auto w-full text-center py-12">
           <h2 className="text-3xl md:text-5xl font-black mb-3">
-            היכנסו ל-MegaClick והזינו קוד
+            היכנסו ל-MegaClick או התקשרו במערכת הקולית
           </h2>
           <p className="text-white/60 text-lg mb-8">
-            המתינו שהשחקנים יתחברו מהמחשב או הנייד...
+            הזינו את הקוד <strong className="text-fuchsia-400">{pinCode}</strong>
           </p>
 
-          {/* Players Grid */}
           <div className="glass rounded-3xl p-8 border border-white/10 min-h-[250px] mb-8 flex flex-wrap gap-4 items-center justify-center">
             {players.length === 0 ? (
               <p className="text-white/40 animate-pulse text-lg">
-                מחכה לשחקנים ראשונים...
+                מחכה לשחקנים (מהאתר או מהטלפון)...
               </p>
             ) : (
               players.map((p) => (
@@ -330,7 +363,7 @@ export default function HostGamePage({
                   key={p.id}
                   className="bg-gradient-to-r from-fuchsia-500/20 to-violet-500/20 border border-fuchsia-500/40 px-6 py-3 rounded-2xl font-bold text-lg animate-in zoom-in duration-200"
                 >
-                  🎮 {p.name}
+                  {p.isPhone ? '📞' : '🎮'} {p.name}
                 </div>
               ))
             )}
@@ -350,7 +383,7 @@ export default function HostGamePage({
         </div>
       )}
 
-      {/* 2. QUESTION STATE */}
+      {/* QUESTION STATE */}
       {gameState === 'QUESTION' && (
         <div className="max-w-5xl mx-auto w-full py-6">
           <div className="flex justify-between items-center mb-6">
@@ -390,15 +423,13 @@ export default function HostGamePage({
         </div>
       )}
 
-      {/* 3. SHOW RESULT STATE */}
+      {/* SHOW RESULT STATE */}
       {gameState === 'SHOW_RESULT' && (
         <div className="max-w-4xl mx-auto w-full text-center py-10">
           <h2 className="text-4xl font-black mb-8">התשובה הנכונה היא:</h2>
-
           <div className="glass p-8 rounded-3xl border-2 border-emerald-500 bg-emerald-500/10 text-3xl font-black text-emerald-300 mb-10">
             {currentQ.options[currentQ.correct_option]}
           </div>
-
           <button
             onClick={showLeaderboard}
             className="px-10 py-4 rounded-2xl font-black text-xl bg-gradient-to-r from-fuchsia-500 to-violet-600 hover:from-fuchsia-400 hover:to-violet-500 shadow-xl transition-all"
@@ -408,13 +439,10 @@ export default function HostGamePage({
         </div>
       )}
 
-      {/* 4. LEADERBOARD STATE */}
+      {/* LEADERBOARD STATE */}
       {gameState === 'LEADERBOARD' && (
         <div className="max-w-3xl mx-auto w-full py-6">
-          <h2 className="text-4xl font-black text-center mb-8">
-            טבלת מובילים 🏆
-          </h2>
-
+          <h2 className="text-4xl font-black text-center mb-8">טבלת מובילים 🏆</h2>
           <div className="space-y-3 mb-10">
             {sortedPlayers.slice(0, 5).map((p, rank) => (
               <div
@@ -422,44 +450,30 @@ export default function HostGamePage({
                 className="glass p-4 rounded-2xl border border-white/10 flex items-center justify-between font-bold text-lg"
               >
                 <div className="flex items-center gap-4">
-                  <span
-                    className={`w-8 h-8 rounded-full flex items-center justify-center text-sm ${
-                      rank === 0
-                        ? 'bg-amber-400 text-black'
-                        : rank === 1
-                        ? 'bg-slate-300 text-black'
-                        : rank === 2
-                        ? 'bg-amber-700 text-white'
-                        : 'bg-white/10'
-                    }`}
-                  >
+                  <span className="w-8 h-8 rounded-full flex items-center justify-center text-sm bg-white/10">
                     {rank + 1}
                   </span>
-                  <span>{p.name}</span>
+                  <span>{p.isPhone ? '📞' : '🎮'} {p.name}</span>
                 </div>
                 <span className="text-fuchsia-300">{p.score} נק׳</span>
               </div>
             ))}
           </div>
-
           <div className="text-center">
             <button
               onClick={nextQuestion}
               className="px-10 py-4 rounded-2xl font-black text-xl bg-gradient-to-r from-fuchsia-500 to-violet-600 hover:from-fuchsia-400 hover:to-violet-500 shadow-xl transition-all"
             >
-              {currentQuestionIndex + 1 < questions.length
-                ? 'לשאלה הבאה ➔'
-                : 'לסיום המשחק 🎉'}
+              {currentQuestionIndex + 1 < questions.length ? 'לשאלה הבאה ➔' : 'לסיום המשחק 🎉'}
             </button>
           </div>
         </div>
       )}
 
-      {/* 5. GAME OVER STATE */}
+      {/* GAME OVER STATE */}
       {gameState === 'GAME_OVER' && (
         <div className="max-w-3xl mx-auto w-full text-center py-12">
           <h2 className="text-5xl font-black mb-4">המנצחים הגדולים! 🎉</h2>
-
           {sortedPlayers.length > 0 && (
             <div className="glass neon p-8 rounded-3xl border border-fuchsia-500/50 my-8">
               <div className="text-6xl mb-2">🥇</div>
@@ -471,7 +485,6 @@ export default function HostGamePage({
               </p>
             </div>
           )}
-
           <Link
             href="/dashboard"
             className="inline-block px-10 py-4 rounded-2xl font-black text-xl bg-white/10 hover:bg-white/20 border border-white/20"
