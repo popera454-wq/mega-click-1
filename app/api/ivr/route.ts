@@ -20,11 +20,10 @@ function cleanPhone(p: string): string {
 }
 
 async function handleRequest(req: Request) {
-  // מעטפת הגנה - מונעת שגיאות 500 שמפילות את ימות המשיח
   try {
     const url = new URL(req.url);
 
-    // תפיסת מספר הטלפון מכל האפשרויות שימות המשיח שולחת ב-GET או ב-POST
+    // תפיסת מספר הטלפון מכל האפשרויות שימות המשיח שולחת
     const rawPhone =
       url.searchParams.get("ApiPhone") ||
       url.searchParams.get("api_phone") ||
@@ -33,7 +32,7 @@ async function handleRequest(req: Request) {
       "";
     const phone = cleanPhone(rawPhone);
 
-    // תפיסת הערכים שהוקשו - תומך גם בפורמט הרגיל וגם בפורמט של ה-val_name
+    // תפיסת הערכים שהוקשו על ידי המאזין
     const inputPin = String(
       url.searchParams.get("q_pin") || 
       url.searchParams.get("val_name_q_pin") || 
@@ -215,8 +214,7 @@ async function handleRequest(req: Request) {
 
   } catch (err) {
     console.error("IVR System Error:", err);
-    // מענה גיבוי - תמיד מחזיר תגובה תקינה שאינה מפילה את ימות המשיח
-    return makeIvrRead("אירעה שגיאה תקשורת. נא להקיש את קוד המשחק שנית", "q_pin", 6, 6);
+    return makeIvrRead("אירעה שגיאה בתקשורת. נא להקיש את קוד המשחק שנית", "q_pin", 6, 6);
   }
 }
 
@@ -226,7 +224,6 @@ function makeIvrRead(text: string, valName: string, minDigits = 1, maxDigits = 1
     status: 200,
     headers: {
       "Content-Type": "text/plain; charset=utf-8",
-      "Cache-Control": "no-cache, no-store, must-revalidate",
     },
   });
 }
@@ -237,7 +234,6 @@ function makeIvrWait(text: string) {
     status: 200,
     headers: {
       "Content-Type": "text/plain; charset=utf-8",
-      "Cache-Control": "no-cache, no-store, must-revalidate",
     },
   });
 }
