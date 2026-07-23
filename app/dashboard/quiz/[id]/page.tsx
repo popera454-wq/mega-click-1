@@ -5,17 +5,23 @@ import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { supabase } from '@/lib/supabase';
 
-interface Question {
+// הגדרת הסוגים החדשים
+type SlideType = 'trivia' | 'poll' | 'image_answer' | 'text_slide' | 'media_slide';
+
+interface Slide {
   id: string;
-  question_text: string;
-  options: string[];
-  correct_option: number | null;
-  correct_options: number[];
-  time_limit: number;
-  question_type: 'single_choice' | 'multiple_correct' | 'true_false' | 'poll' | 'range';
-  min_range?: number | null;
-  max_range?: number | null;
-  correct_range_value?: number | null;
+  question_type: SlideType;
+  question_text?: string;
+  slide_title?: string;
+  slide_content?: string;
+  options?: string[];
+  option_images?: string[];
+  correct_option?: number | null;
+  correct_options?: number[];
+  allow_multiple?: boolean;
+  time_limit?: number;
+  media_url?: string;
+  youtube_url?: string;
 }
 
 interface Quiz {
@@ -29,20 +35,27 @@ export default function EditQuizPage({ params }: { params: { id: string } }) {
   const router = useRouter();
 
   const [quiz, setQuiz] = useState<Quiz | null>(null);
-  const [questions, setQuestions] = useState<Question[]>([]);
+  const [slides, setSlides] = useState<Slide[]>([]);
   const [loading, setLoading] = useState(true);
+  const [adding, setAdding] = useState(false);
 
-  // Form States
-  const [questionType, setQuestionType] = useState<Question['question_type']>('single_choice');
+  // --- Form States ---
+  const [slideType, setSlideType] = useState<SlideType>('trivia');
+  
+  // States for Questions (Trivia, Poll, Image)
   const [questionText, setQuestionText] = useState('');
-  const [options, setOptions] = useState<string[]>(['', '', '', '']);
+  const [options, setOptions] = useState<string[]>(['', '']);
+  const [optionImages, setOptionImages] = useState<string[]>(['', '']);
   const [correctOption, setCorrectOption] = useState<number>(0);
   const [correctOptions, setCorrectOptions] = useState<number[]>([]);
-  const [minRange, setMinRange] = useState<number | ''>(0);
-  const [maxRange, setMaxRange] = useState<number | ''>(100);
-  const [correctRangeValue, setCorrectRangeValue] = useState<number | ''>(50);
-  const [timeLimit, setTimeLimit] = useState<number>(20);
-  const [adding, setAdding] = useState(false);
+  const [allowMultiple, setAllowMultiple] = useState(false);
+  const [timeLimit, setTimeLimit] = useState<number>(15);
+
+  // States for Slides (Text, Media)
+  const [slideTitle, setSlideTitle] = useState('');
+  const [slideContent, setSlideContent] = useState('');
+  const [mediaUrl, setMediaUrl] = useState('');
+  const [youtubeUrl, setYoutubeUrl] = useState('');
 
   useEffect(() => {
     const fetchQuizData = async () => {
@@ -67,14 +80,14 @@ export default function EditQuizPage({ params }: { params: { id: string } }) {
 
       setQuiz(quizData);
 
-      const { data: qData, error: qErr } = await supabase
+      const { data: slidesData, error: slidesErr } = await supabase
         .from('questions')
         .select('*')
         .eq('quiz_id', quizId)
         .order('created_at', { ascending: true });
 
-      if (!qErr && qData) {
-        setQuestions(qData);
+      if (!slidesErr && slidesData) {
+        setSlides(slidesData);
       }
 
       setLoading(false);
@@ -83,17 +96,14 @@ export default function EditQuizPage({ params }: { params: { id: string } }) {
     if (quizId) fetchQuizData();
   }, [quizId, router]);
 
-  // Handle Type Changes & Resets
-  const handleTypeChange = (type: Question['question_type']) => {
-    setQuestionType(type);
-    if (type === 'true_false') {
-      setOptions(['נכון', 'לא נכון']);
+  // Handle Type Changes
+  const handleTypeChange = (type: SlideType) => {
+    setSlideType(type);
+    // איפוס שדות רלוונטיים כשמחליפים טאב
+    if (type === 'trivia' || type === 'poll' || type === 'image_answer') {
+      setOptions(['', '']);
+      setOptionImages(['', '']);
       setCorrectOption(0);
-    } else if (type === 'single_choice' || type === 'poll') {
-      setOptions(['', '', '', '']);
-      setCorrectOption(0);
-    } else if (type === 'multiple_correct') {
-      setOptions(['', '', '', '']);
       setCorrectOptions([]);
     }
   };
@@ -104,6 +114,23 @@ export default function EditQuizPage({ params }: { params: { id: string } }) {
     setOptions(updated);
   };
 
+  const handleAddOption = () => {
+    if (options.length < 6) { // הגבלה ל-6 תשובות כמו בתמונה
+      setOptions([...options, '']);
+      setOptionImages([...optionImages, '']);
+    }
+  };
+
+  const handleRemoveOption = (index: number) => {
+    if (options.length > 2) {
+      const updatedOpts = options.filter((_, i) => i !== index);
+      const updatedImgs = optionImages.filter((_, i) => i !== index);
+      setOptions(updatedOpts);
+      setOptionImages(updatedImgs);
+      if (correctOption === index) setCorrectOption(0);
+    }
+  };
+
   const toggleMultipleCorrect = (index: number) => {
     if (correctOptions.includes(index)) {
       setCorrectOptions(correctOptions.filter(i => i !== index));
@@ -112,44 +139,43 @@ export default function EditQuizPage({ params }: { params: { id: string } }) {
     }
   };
 
-  const handleAddQuestion = async (e: React.FormEvent) => {
+  const handleSaveSlide = async (e: React.FormEvent) => {
     e.preventDefault();
-
-    if (!questionText.trim()) {
-      alert('נא להזין את תוכן השאלה');
-      return;
-    }
-
-    if (questionType !== 'range' && options.some(opt => !opt.trim())) {
-      alert('נא למלא את כל אפשרויות התשובה');
-      return;
-    }
-
-    if (questionType === 'multiple_correct' && correctOptions.length === 0) {
-      alert('נא לסמן לפחות תשובה אחת נכונה');
-      return;
-    }
-
-    if (questionType === 'range' && (minRange === '' || maxRange === '' || correctRangeValue === '')) {
-      alert('נא להגדיר טווח מספרים ואת התשובה הנכונה בטווח');
-      return;
-    }
-
     setAdding(true);
 
     try {
-      const payload = {
+      const payload: any = {
         quiz_id: quizId,
-        question_text: questionText.trim(),
-        question_type: questionType,
-        options: questionType === 'range' ? [] : options.map(o => o.trim()),
-        correct_option: questionType === 'single_choice' || questionType === 'true_false' ? correctOption : null,
-        correct_options: questionType === 'multiple_correct' ? correctOptions : [],
-        min_range: questionType === 'range' ? Number(minRange) : null,
-        max_range: questionType === 'range' ? Number(maxRange) : null,
-        correct_range_value: questionType === 'range' ? Number(correctRangeValue) : null,
-        time_limit: timeLimit,
+        question_type: slideType,
       };
+
+      // בניית הפיילוד בהתאם לסוג השקופית
+      if (['trivia', 'poll', 'image_answer'].includes(slideType)) {
+        if (!questionText.trim()) throw new Error('נא להזין את טקסט השאלה');
+        
+        payload.question_text = questionText.trim();
+        payload.options = options.map(o => o.trim());
+        payload.time_limit = timeLimit;
+        
+        if (slideType === 'image_answer') {
+           payload.option_images = optionImages;
+        }
+
+        if (slideType !== 'poll') {
+           payload.allow_multiple = allowMultiple;
+           payload.correct_option = allowMultiple ? null : correctOption;
+           payload.correct_options = allowMultiple ? correctOptions : [];
+        }
+      } else if (slideType === 'text_slide') {
+        if (!slideTitle.trim()) throw new Error('נא להזין את שם השקופית');
+        payload.slide_title = slideTitle.trim();
+        payload.slide_content = slideContent.trim();
+      } else if (slideType === 'media_slide') {
+        if (!slideTitle.trim()) throw new Error('נא להזין את שם השקופית');
+        payload.slide_title = slideTitle.trim();
+        payload.media_url = mediaUrl;
+        payload.youtube_url = youtubeUrl;
+      }
 
       const { data, error } = await supabase
         .from('questions')
@@ -159,325 +185,257 @@ export default function EditQuizPage({ params }: { params: { id: string } }) {
 
       if (error) throw error;
 
-      setQuestions([...questions, data]);
-
-      // Reset Form
+      setSlides([...slides, data]);
+      
+      // Reset form (Optional - you might want to keep some settings)
       setQuestionText('');
-      if (questionType === 'single_choice' || questionType === 'multiple_correct' || questionType === 'poll') {
-        setOptions(['', '', '', '']);
-      }
+      setSlideTitle('');
+      setSlideContent('');
+      setYoutubeUrl('');
+      setOptions(['', '']);
       setCorrectOption(0);
       setCorrectOptions([]);
-      setMinRange(0);
-      setMaxRange(100);
-      setCorrectRangeValue(50);
-      setTimeLimit(20);
+      
     } catch (err: any) {
-      alert('שגיאה בהוספת השאלה: ' + err.message);
+      alert('שגיאה בשמירה: ' + err.message);
     } finally {
       setAdding(false);
     }
   };
 
-  const handleDeleteQuestion = async (qId: string) => {
-    if (!confirm('האם למחוק שאלה זו?')) return;
-    const { error } = await supabase.from('questions').delete().eq('id', qId);
-    if (error) {
-      alert('שגיאה במחיקת השאלה');
-    } else {
-      setQuestions(questions.filter(q => q.id !== qId));
+  const handleDeleteSlide = async (id: string) => {
+    if (!confirm('האם למחוק שקופית זו?')) return;
+    const { error } = await supabase.from('questions').delete().eq('id', id);
+    if (!error) {
+      setSlides(slides.filter(s => s.id !== id));
     }
   };
 
   if (loading) {
     return (
-      <main className="min-h-screen grid-bg bg-[#0d041e] text-white flex justify-center items-center dir-rtl">
-        <div className="flex flex-col items-center gap-4">
-          <div className="w-12 h-12 border-4 border-fuchsia-500/30 border-t-fuchsia-500 rounded-full animate-spin shadow-lg shadow-fuchsia-500/20" />
-          <p className="text-white/60 font-medium text-sm">טוען את עריכת החידון...</p>
-        </div>
+      <main className="min-h-screen bg-[#0d041e] text-white flex justify-center items-center dir-rtl">
+        <div className="w-12 h-12 border-4 border-emerald-500/30 border-t-emerald-500 rounded-full animate-spin" />
       </main>
     );
   }
 
   return (
-    <main className="min-h-screen grid-bg bg-[#0d041e] text-white dir-rtl pb-24 selection:bg-fuchsia-500 selection:text-white">
-      {/* Header */}
-      <header className="sticky top-0 z-30 flex items-center justify-between border-b border-white/10 bg-[#130728]/80 px-6 py-4 backdrop-blur-2xl md:px-12 shadow-2xl">
+    <main className="min-h-screen bg-[#f8f9fa] dark:bg-[#0d041e] text-gray-800 dark:text-white dir-rtl pb-10">
+      
+      {/* Header - Top Navbar */}
+      <header className="sticky top-0 z-30 flex items-center justify-between border-b border-gray-200 dark:border-white/10 bg-white dark:bg-[#130728] px-6 py-4 shadow-sm">
         <div className="flex items-center gap-4">
-          <Link
-            href="/dashboard"
-            className="px-4 py-2 rounded-xl bg-white/5 hover:bg-white/10 text-white/70 hover:text-white transition-all text-sm font-bold border border-white/5"
-          >
-            ← חזרה לדשבורד
+          <Link href="/dashboard" className="text-sm font-bold text-gray-500 hover:text-gray-800 dark:text-white/70 dark:hover:text-white">
+            ← חזרה
           </Link>
-          <span className="text-xl font-black bg-gradient-to-r from-fuchsia-200 to-white bg-clip-text text-transparent truncate max-w-[200px] md:max-w-md">
-            עריכה: {quiz?.title}
-          </span>
+          <span className="text-lg font-bold truncate max-w-[200px]">{quiz?.title}</span>
         </div>
-
-        <Link
-          href={`/host/${quizId}`}
-          className="px-5 py-2.5 rounded-xl font-bold bg-gradient-to-r from-fuchsia-500 to-violet-600 hover:from-fuchsia-400 hover:to-violet-500 text-white shadow-lg shadow-fuchsia-500/30 transition-all text-sm hover:scale-105 active:scale-95"
-        >
-          הפעל משחק 🚀
-        </Link>
+        <div className="flex gap-3">
+            <button className="px-4 py-2 rounded-full border border-gray-300 dark:border-white/20 text-sm font-bold">
+              תצוגה מקדימה 👁️
+            </button>
+            <Link href={`/host/${quizId}`} className="px-6 py-2 rounded-full font-bold bg-emerald-500 hover:bg-emerald-600 text-white shadow-lg transition-all">
+              שמירת הגדרות
+            </Link>
+        </div>
       </header>
 
-      <div className="max-w-7xl mx-auto px-6 pt-10 grid grid-cols-1 lg:grid-cols-12 gap-8">
-        {/* Form Column */}
-        <div className="lg:col-span-7">
-          <div className="glass neon rounded-3xl p-6 md:p-8 border border-white/10 shadow-2xl">
-            <h2 className="text-2xl font-black mb-1 text-white">
-              הוספת שאלה לטלפון 📞
-            </h2>
-            <p className="text-white/60 text-xs mb-6">
-              בחר את פורמט השאלה שמתאים למשתתפים שמחייגים למערכת.
-            </p>
+      <div className="flex h-[calc(100vh-73px)]">
+        
+        {/* Right Sidebar - Slides List (כמו בתמונה) */}
+        <aside className="w-80 border-l border-gray-200 dark:border-white/10 bg-white dark:bg-[#1a0b38] overflow-y-auto flex flex-col">
+          <div className="p-4 border-b border-gray-200 dark:border-white/10">
+            <div className="flex gap-2 mb-4">
+              <button className="flex-1 bg-emerald-100 text-emerald-700 dark:bg-emerald-500/20 dark:text-emerald-400 py-2 rounded-xl text-sm font-bold border border-emerald-200 dark:border-emerald-500/30">
+                יבוא מאקסל 📊
+              </button>
+              <button className="flex-1 bg-amber-100 text-amber-700 dark:bg-amber-500/20 dark:text-amber-400 py-2 rounded-xl text-sm font-bold border border-amber-200 dark:border-amber-500/30">
+                צור ב-AI ✨
+              </button>
+            </div>
+            <h3 className="font-bold text-sm text-gray-500 dark:text-white/50">{slides.length} שקופיות</h3>
+          </div>
 
-            {/* Type Selector Grid */}
-            <div className="grid grid-cols-2 md:grid-cols-3 gap-2 mb-6">
+          <div className="p-4 flex flex-col gap-3">
+            {slides.map((slide, idx) => (
+              <div key={slide.id} className="relative group p-3 rounded-xl border border-gray-200 dark:border-white/10 bg-gray-50 dark:bg-white/5 hover:border-emerald-500 transition-colors cursor-pointer">
+                <div className="flex justify-between items-start mb-1">
+                  <span className="text-xs font-bold px-2 py-0.5 rounded bg-gray-200 dark:bg-white/10">
+                    {idx + 1}. {
+                      slide.question_type === 'trivia' ? 'טריוויה' : 
+                      slide.question_type === 'poll' ? 'סקר' : 
+                      slide.question_type === 'image_answer' ? 'תמונה' : 
+                      slide.question_type === 'text_slide' ? 'טקסט' : 'מדיה'
+                    }
+                  </span>
+                  <button onClick={() => handleDeleteSlide(slide.id)} className="text-red-400 opacity-0 group-hover:opacity-100 transition-opacity text-xs">מחק ✕</button>
+                </div>
+                <p className="text-sm font-semibold truncate">
+                  {slide.question_text || slide.slide_title || 'שקופית ללא שם'}
+                </p>
+              </div>
+            ))}
+          </div>
+        </aside>
+
+        {/* Main Work Area */}
+        <div className="flex-1 overflow-y-auto p-8 bg-gray-50 dark:bg-transparent">
+          <div className="max-w-4xl mx-auto">
+            
+            {/* Top Types Toolbar */}
+            <div className="flex justify-center gap-3 mb-8">
               {[
-                { id: 'single_choice', label: 'רב-בררה (אחת נכונה)' },
-                { id: 'multiple_correct', label: 'כמה תשובות נכונות' },
-                { id: 'true_false', label: 'נכון / לא נכון' },
-                { id: 'poll', label: 'סקר (ללא ציון)' },
-                { id: 'range', label: 'טווח מספרים (למשל 30-50)' },
-              ].map((t) => (
+                { id: 'trivia', label: 'טריוויה', icon: '📄' },
+                { id: 'poll', label: 'סקר', icon: '⏱️' },
+                { id: 'image_answer', label: 'תשובה בתמונה', icon: '🖼️' },
+                { id: 'text_slide', label: 'טקסט', icon: '📝' },
+                { id: 'media_slide', label: 'מדיה', icon: '🎥' }
+              ].map(type => (
                 <button
-                  key={t.id}
-                  type="button"
-                  onClick={() => handleTypeChange(t.id as any)}
-                  className={`p-3 text-xs font-bold rounded-2xl transition-all border ${
-                    questionType === t.id
-                      ? 'bg-gradient-to-r from-fuchsia-600 to-violet-600 text-white border-fuchsia-400 shadow-lg shadow-fuchsia-500/20'
-                      : 'bg-white/5 text-white/70 border-white/10 hover:bg-white/10'
+                  key={type.id}
+                  onClick={() => handleTypeChange(type.id as SlideType)}
+                  className={`flex flex-col items-center justify-center w-24 h-24 rounded-2xl border transition-all ${
+                    slideType === type.id 
+                    ? 'border-emerald-500 bg-emerald-50 dark:bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 shadow-md' 
+                    : 'border-gray-200 dark:border-white/10 bg-white dark:bg-white/5 hover:border-emerald-300 dark:hover:border-white/20'
                   }`}
                 >
-                  {t.label}
+                  <span className="text-2xl mb-2">{type.icon}</span>
+                  <span className="text-xs font-bold">{type.label}</span>
                 </button>
               ))}
             </div>
 
-            <form onSubmit={handleAddQuestion} className="space-y-5">
-              {/* Question Text */}
-              <div>
-                <label className="block text-xs font-bold text-white/80 mb-1.5">
-                  תוכן השאלה <span className="text-fuchsia-400">*</span>
-                </label>
-                <input
-                  type="text"
-                  required
-                  value={questionText}
-                  onChange={(e) => setQuestionText(e.target.value)}
-                  placeholder={questionType === 'range' ? 'למשל: בכמה שקלים נמכר המוצר?' : 'למשל: מהו צבע השמים?'}
-                  className="w-full px-4 py-3.5 rounded-2xl bg-white/5 border border-white/10 text-white placeholder-white/30 focus:outline-none focus:border-fuchsia-400 focus:bg-white/10 transition-all text-sm"
-                />
-              </div>
-
-              {/* Time Limit */}
-              <div>
-                <label className="block text-xs font-bold text-white/80 mb-1.5">
-                  זמן למענה (בשניות)
-                </label>
-                <select
-                  value={timeLimit}
-                  onChange={(e) => setTimeLimit(Number(e.target.value))}
-                  className="w-full px-4 py-3.5 rounded-2xl bg-[#1d0b38] border border-white/10 text-white focus:outline-none focus:border-fuchsia-400 transition-all text-sm"
-                >
-                  <option value={10}>10 שניות</option>
-                  <option value={20}>20 שניות (מומלץ)</option>
-                  <option value={30}>30 שניות</option>
-                  <option value={60}>60 שניות</option>
-                </select>
-              </div>
-
-              {/* Range Configuration */}
-              {questionType === 'range' && (
-                <div className="space-y-4 p-4 rounded-2xl bg-fuchsia-500/10 border border-fuchsia-500/20">
-                  <div className="grid grid-cols-2 gap-4">
+            {/* Editor Card */}
+            <div className="bg-white dark:bg-[#1a0b38] rounded-3xl p-6 md:p-8 shadow-xl border border-gray-100 dark:border-white/10">
+              <form onSubmit={handleSaveSlide}>
+                
+                {/* 1. TRIVIA / POLL / IMAGE ANSWER */}
+                {['trivia', 'poll', 'image_answer'].includes(slideType) && (
+                  <div className="space-y-6">
                     <div>
-                      <label className="block text-xs font-bold text-fuchsia-200 mb-1">ערך מינימלי</label>
-                      <input
-                        type="number"
-                        required
-                        value={minRange}
-                        onChange={(e) => setMinRange(e.target.value === '' ? '' : Number(e.target.value))}
-                        className="w-full px-4 py-3 rounded-xl bg-white/5 border border-white/10 text-white text-sm"
-                      />
-                    </div>
-                    <div>
-                      <label className="block text-xs font-bold text-fuchsia-200 mb-1">ערך מקסימלי</label>
-                      <input
-                        type="number"
-                        required
-                        value={maxRange}
-                        onChange={(e) => setMaxRange(e.target.value === '' ? '' : Number(e.target.value))}
-                        className="w-full px-4 py-3 rounded-xl bg-white/5 border border-white/10 text-white text-sm"
-                      />
-                    </div>
-                  </div>
-
-                  <div>
-                    <label className="block text-xs font-bold text-fuchsia-200 mb-1">
-                      🎯 התשובה הנכונה המדויקת (הקרוב ביותר יקבל ניקוד מקסימלי):
-                    </label>
-                    <input
-                      type="number"
-                      required
-                      value={correctRangeValue}
-                      onChange={(e) => setCorrectRangeValue(e.target.value === '' ? '' : Number(e.target.value))}
-                      placeholder="למשל: 42"
-                      className="w-full px-4 py-3 rounded-xl bg-white/5 border border-fuchsia-500/50 text-white text-sm font-bold"
-                    />
-                  </div>
-
-                  <div className="text-[11px] text-fuchsia-300">
-                    💡 המשתתפים יקלידו מספר בטלפון ויסיימו בסולמית (#). המערכת תחשב אוטומטית מי הכי קרוב לתשובה הנכונה.
-                  </div>
-                </div>
-              )}
-
-              {/* Options Configuration */}
-              {questionType !== 'range' && (
-                <div className="space-y-3 pt-2">
-                  <label className="block text-xs font-bold text-white/80">
-                    {questionType === 'multiple_correct'
-                      ? 'סמן את כל התשובות הנכונות:'
-                      : questionType === 'poll'
-                      ? 'אפשרויות לבחירה בסקר (ללא תשובה נכונה):'
-                      : 'אפשרויות תשובה (סמן את הנכונה):'}
-                  </label>
-
-                  {options.map((opt, idx) => (
-                    <div key={idx} className="flex items-center gap-3">
-                      {questionType === 'multiple_correct' ? (
-                        <input
-                          type="checkbox"
-                          checked={correctOptions.includes(idx)}
-                          onChange={() => toggleMultipleCorrect(idx)}
-                          className="w-5 h-5 accent-fuchsia-500 cursor-pointer rounded"
-                          title="סמן כתשובה נכונה"
-                        />
-                      ) : questionType !== 'poll' ? (
-                        <input
-                          type="radio"
-                          name="correct_option"
-                          checked={correctOption === idx}
-                          onChange={() => setCorrectOption(idx)}
-                          className="w-5 h-5 accent-fuchsia-500 cursor-pointer"
-                          title="סמן כתשובה נכונה"
-                        />
-                      ) : (
-                        <span className="w-5 text-center text-xs text-white/40 font-bold">{idx + 1}</span>
-                      )}
-
+                      <label className="block text-sm font-bold mb-2">טקסט השאלה</label>
                       <input
                         type="text"
-                        required={questionType !== 'true_false'}
-                        readOnly={questionType === 'true_false'}
-                        value={opt}
-                        onChange={(e) => handleOptionChange(idx, e.target.value)}
-                        placeholder={`אפשרות למקש ${idx + 1}`}
-                        className={`w-full px-4 py-3 rounded-2xl border text-sm transition-all focus:outline-none ${
-                          (questionType === 'multiple_correct' && correctOptions.includes(idx)) ||
-                          (questionType !== 'multiple_correct' && questionType !== 'poll' && correctOption === idx)
-                            ? 'bg-fuchsia-500/15 border-fuchsia-500 text-white font-bold'
-                            : 'bg-white/5 border-white/10 text-white/80 placeholder-white/30'
-                        }`}
+                        required
+                        value={questionText}
+                        onChange={e => setQuestionText(e.target.value)}
+                        placeholder={slideType === 'poll' ? "סקר: " : "שאלה חדשה"}
+                        className="w-full text-xl font-bold px-4 py-4 rounded-xl bg-gray-50 dark:bg-white/5 border border-gray-200 dark:border-white/10 focus:border-emerald-500 outline-none"
                       />
                     </div>
-                  ))}
-                </div>
-              )}
 
-              <button
-                type="submit"
-                disabled={adding}
-                className="w-full mt-4 py-4 rounded-2xl font-bold bg-gradient-to-r from-fuchsia-500 to-violet-600 hover:from-fuchsia-400 hover:to-violet-500 text-white shadow-xl shadow-fuchsia-500/25 transition-all text-sm disabled:opacity-50 active:scale-95"
-              >
-                {adding ? 'מוסיף שאלה...' : '+ הוסף שאלה לחידון'}
-              </button>
-            </form>
-          </div>
-        </div>
+                    {slideType !== 'poll' && (
+                      <div className="flex items-center justify-end gap-2">
+                        <label className="text-sm font-semibold">אפשר מספר תשובות נכונות</label>
+                        <input type="checkbox" checked={allowMultiple} onChange={e => setAllowMultiple(e.target.checked)} className="w-4 h-4 accent-emerald-500" />
+                      </div>
+                    )}
 
-        {/* List Column */}
-        <div className="lg:col-span-5">
-          <div className="flex items-center justify-between mb-4">
-            <h3 className="text-xl font-bold text-white">
-              שאלות בחידון ({questions.length})
-            </h3>
-          </div>
-
-          {questions.length === 0 ? (
-            <div className="glass rounded-3xl p-8 text-center text-white/50 text-sm border border-white/10">
-              עדיין לא הוספת שאלות לחידון זה.
-            </div>
-          ) : (
-            <div className="space-y-4 max-h-[650px] overflow-y-auto pr-2">
-              {questions.map((q, qIndex) => (
-                <div
-                  key={q.id}
-                  className="glass rounded-3xl p-5 border border-white/10 relative group hover:border-fuchsia-500/40 transition-all"
-                >
-                  <div className="flex items-start justify-between gap-2 mb-2">
-                    <div className="flex items-center gap-2 flex-wrap">
-                      <span className="text-[10px] px-2.5 py-1 rounded-lg bg-fuchsia-500/20 text-fuchsia-300 font-bold">
-                        {q.question_type === 'multiple_correct' ? 'כמה נכונות' :
-                         q.question_type === 'true_false' ? 'נכון/לא נכון' :
-                         q.question_type === 'poll' ? 'סקר' :
-                         q.question_type === 'range' ? 'טווח מספרים' : 'רב-בררה'}
-                      </span>
-                      <span className="font-bold text-white text-sm">
-                        #{qIndex + 1}. {q.question_text}
-                      </span>
-                    </div>
-                    <button
-                      onClick={() => handleDeleteQuestion(q.id)}
-                      className="text-white/30 hover:text-red-400 transition-colors p-1.5 rounded-xl hover:bg-red-500/10"
-                      title="מחק שאלה"
-                    >
-                      ✕
-                    </button>
-                  </div>
-
-                  {q.question_type === 'range' ? (
-                    <div className="mt-3 text-xs text-fuchsia-200 bg-fuchsia-500/10 p-3 rounded-xl space-y-1">
-                      <div>📊 טווח מספרים: <strong>{q.min_range} עד {q.max_range}</strong></div>
-                      <div>🎯 התשובה הנכונה: <strong className="text-emerald-400">{q.correct_range_value}</strong></div>
-                    </div>
-                  ) : (
-                    <div className="grid grid-cols-2 gap-2 mt-3 text-xs">
-                      {q.options.map((opt, optIndex) => {
-                        const isCorrect =
-                          q.question_type === 'multiple_correct'
-                            ? q.correct_options?.includes(optIndex)
-                            : q.correct_option === optIndex;
-
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                      {options.map((opt, idx) => {
+                        const isCorrect = allowMultiple ? correctOptions.includes(idx) : correctOption === idx;
                         return (
-                          <div
-                            key={optIndex}
-                            className={`p-2.5 rounded-xl truncate ${
-                              isCorrect
-                                ? 'bg-fuchsia-500/25 text-fuchsia-200 border border-fuchsia-500/50 font-bold'
-                                : 'bg-white/5 text-white/60'
-                            }`}
-                          >
-                            מקש {optIndex + 1}: {opt}
+                          <div key={idx} className={`relative flex flex-col p-2 rounded-2xl border-2 transition-all ${isCorrect && slideType !== 'poll' ? 'border-emerald-500 bg-emerald-50 dark:bg-emerald-500/10' : 'border-gray-200 dark:border-white/10'}`}>
+                            <div className="flex gap-2">
+                              {slideType !== 'poll' && (
+                                <button type="button" onClick={() => allowMultiple ? toggleMultipleCorrect(idx) : setCorrectOption(idx)} className={`w-8 h-8 flex-shrink-0 flex items-center justify-center rounded-full ${isCorrect ? 'bg-emerald-500 text-white' : 'bg-gray-200 dark:bg-white/10 text-transparent'}`}>
+                                  ✓
+                                </button>
+                              )}
+                              <input
+                                type="text"
+                                value={opt}
+                                onChange={e => handleOptionChange(idx, e.target.value)}
+                                placeholder={`תשובה ${idx + 1}`}
+                                className="w-full bg-transparent outline-none font-semibold text-sm py-1"
+                                required={slideType !== 'image_answer'}
+                              />
+                              {options.length > 2 && (
+                                <button type="button" onClick={() => handleRemoveOption(idx)} className="text-gray-400 hover:text-red-500">🗑️</button>
+                              )}
+                            </div>
+                            
+                            {/* כפתור העלאת תמונה ספציפי לסוג תמונה */}
+                            {slideType === 'image_answer' && (
+                              <div className="mt-3 border-t border-gray-200 dark:border-white/10 pt-2 flex justify-center">
+                                <button type="button" className="text-xs text-gray-500 dark:text-gray-400 flex items-center gap-1 hover:text-emerald-500">
+                                  <span>⬆️</span> {optionImages[idx] ? 'החלף תמונה' : 'העלה תמונה לתשובה'}
+                                </button>
+                              </div>
+                            )}
                           </div>
                         );
                       })}
                     </div>
-                  )}
+                    
+                    {options.length < 6 && (
+                      <button type="button" onClick={handleAddOption} className="text-sm font-bold text-emerald-500 hover:text-emerald-600 flex items-center gap-2">
+                        + הוסף תשובה
+                      </button>
+                    )}
 
-                  <div className="mt-3 flex items-center justify-between text-[11px] text-white/40 pt-2 border-t border-white/5">
-                    <span>⏱️ {q.time_limit} שניות</span>
+                    <div className="pt-6 border-t border-gray-100 dark:border-white/5">
+                      <label className="block text-sm font-bold mb-2">זמן תגובה (שניות)</label>
+                      <input type="range" min="5" max="120" step="5" value={timeLimit} onChange={e => setTimeLimit(Number(e.target.value))} className="w-full accent-emerald-500" />
+                      <div className="text-center font-bold text-emerald-600 dark:text-emerald-400 mt-2">{timeLimit} שניות</div>
+                    </div>
                   </div>
-                </div>
-              ))}
+                )}
+
+                {/* 2. TEXT SLIDE */}
+                {slideType === 'text_slide' && (
+                  <div className="space-y-6">
+                    <div>
+                      <label className="block text-sm font-bold text-red-500 mb-2">שם השקופית *</label>
+                      <input type="text" required value={slideTitle} onChange={e => setSlideTitle(e.target.value)} placeholder="שאלה חדשה" className="w-full px-4 py-3 rounded-xl bg-gray-50 dark:bg-white/5 border border-gray-200 dark:border-white/10 outline-none" />
+                    </div>
+                    <div>
+                      <label className="block text-sm font-bold text-red-500 mb-2">תוכן השקופית *</label>
+                      <textarea required value={slideContent} onChange={e => setSlideContent(e.target.value)} placeholder="הזן את תוכן השקופית כאן..." rows={6} className="w-full px-4 py-3 rounded-xl bg-gray-50 dark:bg-white/5 border border-red-200 dark:border-red-500/30 outline-none resize-none" />
+                      <p className="text-xs text-gray-500 mt-2">ניתן להזין טקסט חופשי, רשימות וכו'.</p>
+                    </div>
+                  </div>
+                )}
+
+                {/* 3. MEDIA SLIDE */}
+                {slideType === 'media_slide' && (
+                  <div className="space-y-6">
+                     <div>
+                      <label className="block text-sm font-bold text-red-500 mb-2">שם השקופית *</label>
+                      <input type="text" required value={slideTitle} onChange={e => setSlideTitle(e.target.value)} placeholder="שאלה חדשה" className="w-full px-4 py-3 rounded-xl bg-gray-50 dark:bg-white/5 border border-gray-200 dark:border-white/10 outline-none" />
+                    </div>
+                    
+                    <div className="border-2 border-dashed border-gray-300 dark:border-white/20 rounded-2xl p-10 flex flex-col items-center justify-center text-center cursor-pointer hover:bg-gray-50 dark:hover:bg-white/5 transition-colors">
+                      <span className="text-3xl mb-2">⬆️</span>
+                      <h4 className="font-bold text-gray-700 dark:text-white">העלאת קובץ מדיה</h4>
+                      <p className="text-xs text-gray-500">תמונה, וידאו או אודיו</p>
+                    </div>
+
+                    <div className="flex items-center gap-4 my-4">
+                      <div className="flex-1 h-px bg-gray-200 dark:bg-white/10"></div>
+                      <span className="text-sm font-bold text-gray-400">או הטמע סרטון יוטיוב</span>
+                      <div className="flex-1 h-px bg-gray-200 dark:bg-white/10"></div>
+                    </div>
+
+                    <div>
+                      <input type="url" value={youtubeUrl} onChange={e => setYoutubeUrl(e.target.value)} placeholder="YouTube URL (https://www...)" className="w-full px-4 py-3 rounded-xl bg-gray-50 dark:bg-white/5 border border-gray-200 dark:border-white/10 outline-none text-left dir-ltr" />
+                    </div>
+                  </div>
+                )}
+
+                {/* Submit Button */}
+                <button
+                  type="submit"
+                  disabled={adding}
+                  className="w-full mt-8 py-4 rounded-xl font-bold bg-emerald-500 hover:bg-emerald-600 text-white shadow-lg transition-all disabled:opacity-50"
+                >
+                  {adding ? 'שומר...' : 'שמירת שקופית'}
+                </button>
+
+              </form>
             </div>
-          )}
+          </div>
         </div>
       </div>
     </main>
