@@ -10,38 +10,30 @@ export async function GET(req: Request) {
   const { searchParams } = new URL(req.url);
 
   const phone = searchParams.get('ApiPhone') || searchParams.get('phone') || '0000000000';
-  const action = searchParams.get('action') || 'JOIN';
-  
-  // ימות המשיח מעבירה את pin אם הוא הוקש קודם לכן, או שנקבל אותו מה-searchParams
   const pin = searchParams.get('pin');
   const answer = searchParams.get('answer');
+  const action = searchParams.get('action') || (pin ? 'ANSWER' : 'JOIN');
 
   // -------------------------------------------------------------
-  // 1. שלב התחברות (קליטת PIN של 6 ספרות)
+  // 1. שלב התחברות (קליטת PIN)
   // -------------------------------------------------------------
-  if (action === 'JOIN') {
-    if (!pin) {
-      // קליטת 6 ספרות של קוד המשחק. ללא אישורים, קליטה מהירה
-      return new Response(
-        `read=t-ברוכים הבאים למגה קליק! אנא הקישו את קוד המשחק=pin,tap,6,6,10,Number,no,no,no`,
-        { headers: { 'Content-Type': 'text/plain; charset=utf-8' } }
-      );
-    }
+  if (action === 'JOIN' && !pin) {
+    return new Response(
+      `read=t-ברוכים הבאים למגה קליק! אנא הקישו את קוד המשחק=pin,tap,6,6,10,Number,no,no,no`,
+      { headers: { 'Content-Type': 'text/plain; charset=utf-8' } }
+    );
+  }
 
+  // אם התקבל PIN בשלב ההצטרפות
+  if (pin && (!answer || action === 'JOIN')) {
     // שמירת השחקן ב-Supabase
-    const { error } = await supabase.from('game_players').upsert({
+    await supabase.from('game_players').upsert({
       game_pin: pin,
       player_name: `טלפון ${phone.slice(-4)}`,
       phone: phone,
     });
 
-    if (error) {
-      return new Response(`read=t-קוד המשחק שגוי. אנא הקישו שוב=pin,tap,6,6,10,Number,no,no,no`, {
-        headers: { 'Content-Type': 'text/plain; charset=utf-8' },
-      });
-    }
-
-    // מעבר נקי לשלב ה-ANSWER עם הנתיבים המדויקים של הקבצים שלך!
+    // מחזירים הודעת הצלחה + מעבר מיידי למוזיקה לקליטת תשובות
     return new Response(
       `read=t-התחברת בהצלחה.&read=f-ivr2:bgmusic/000=answer,tap,1,1,180,Number,no,no,no`,
       { headers: { 'Content-Type': 'text/plain; charset=utf-8' } }
@@ -49,22 +41,14 @@ export async function GET(req: Request) {
   }
 
   // -------------------------------------------------------------
-  // 2. שלב השלט האילם (קליטת מקש 1-4 בלייב)
+  // 2. שלב השלט האילם (קליטת תשובה 1-4)
   // -------------------------------------------------------------
-  if (action === 'ANSWER') {
-    // אם לא נלחץ מקש עדיין (או שהגיע בטעות), מפעיל את מנגינת הרקע
-    if (!answer) {
-      return new Response(
-        `read=f-ivr2:bgmusic/000=answer,tap,1,1,180,Number,no,no,no`,
-        { headers: { 'Content-Type': 'text/plain; charset=utf-8' } }
-      );
-    }
+  if (action === 'ANSWER' || answer) {
+    if (answer && pin) {
+      const now = Date.now();
+      const answerIndex = Number(answer) - 1; // המרה מ-1..4 ל-0..3
 
-    const now = Date.now();
-    const answerIndex = Number(answer) - 1; // המרה מ-1,2,3,4 ל-0,1,2,3
-
-    // שליפת השאלה הפעילה ב-Supabase עבור המשחק הזה
-    if (pin) {
+      // שליפת השאלה הפעילה ב-Supabase
       const { data: activeGame } = await supabase
         .from('games')
         .select('current_question_index, updated_at')
@@ -75,7 +59,7 @@ export async function GET(req: Request) {
       const questionStartTime = activeGame?.updated_at ? new Date(activeGame.updated_at).getTime() : now;
       const timeTaken = Math.max(0, Number(((now - questionStartTime) / 1000).toFixed(2)));
 
-      // שמירה ב-DB (עדכון תשובה במקרה של שינוי)
+      // שמירה ב-DB
       await supabase.from('game_answers').upsert(
         {
           game_pin: pin,
@@ -87,7 +71,7 @@ export async function GET(req: Request) {
         { onConflict: 'game_pin, phone, question_index' }
       );
 
-      // שידור בזמן אמת ללוח המנחה
+      // שידור ללוח המנחה בזמן אמת
       const channel = supabase.channel(`game_${pin}`);
       await channel.send({
         type: 'broadcast',
@@ -100,11 +84,7 @@ export async function GET(req: Request) {
       });
     }
 
-    /**
-     * השרשור התקני בימות המשיח:
-     * 1. השמעת קובץ הפינג המדויק: f-ivr2:ping/000
-     * 2. חזרה מידית למוזיקת הרקע ולקליטת המקש הבא: f-ivr2:bgmusic/000
-     */
+    // השמעת הביפ + חזרה למוזיקת הרקע לקליטת המקש הבא
     return new Response(
       `read=f-ivr2:ping/000=none,tap,0,0,0,Number,no,no,no&read=f-ivr2:bgmusic/000=answer,tap,1,1,180,Number,no,no,no`,
       { headers: { 'Content-Type': 'text/plain; charset=utf-8' } }
