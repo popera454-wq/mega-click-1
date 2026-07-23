@@ -50,12 +50,16 @@ export default function HostGamePage() {
   const [currentQuestionIndex, setCurrentQuestionIndex] = useState(0);
   const [players, setPlayers] = useState<Player[]>([]);
   const [timeLeft, setTimeLeft] = useState(20);
-  const [answersCount, setAnswersCount] = useState(0);
   const [loading, setLoading] = useState(true);
 
   const channelRef = useRef<RealtimeChannel | null>(null);
   const timerRef = useRef<NodeJS.Timeout | null>(null);
   const questionStartTimeRef = useRef<number>(Date.now());
+
+  // חישוב דינמי של מספר המשיבים בשאלה הנוכחית
+  const answersCount = players.filter(
+    (p) => p.lastAnswerIndex !== undefined || p.lastAnswerValue !== undefined
+  ).length;
 
   const getParsedOptions = (options: string[] | string | undefined): string[] => {
     if (!options) return [];
@@ -154,8 +158,7 @@ export default function HostGamePage() {
       const cleanId = String(identifier).replace(/\D/g, '');
 
       setPlayers((prevPlayers) => {
-        let isNewAnswer = false;
-        const updated = prevPlayers.map((p) => {
+        return prevPlayers.map((p) => {
           const cleanPlayerPhone = p.phone.replace(/\D/g, '');
           const match =
             p.id === identifier ||
@@ -167,15 +170,14 @@ export default function HostGamePage() {
 
           if (match) {
             if (p.lastAnswerIndex !== undefined || p.lastAnswerValue !== undefined) return p;
-            isNewAnswer = true;
 
             let bonus = 0;
 
-            // סקר (Poll) - ללא ניקוד בכלל
+            // סקר (Poll) - ללא ניקוד
             if (currentQ.question_type === 'poll') {
               bonus = 0;
             } 
-            // טווח מספרים (Range) - חישוב קרבה לתשובה הנכונה
+            // טווח מספרים (Range)
             else if (currentQ.question_type === 'range') {
               const numVal = Number(answerVal);
               const correctVal = Number(currentQ.correct_range_value ?? 0);
@@ -184,7 +186,6 @@ export default function HostGamePage() {
               const maxPossibleDiff = Math.max(Math.abs(maxR - correctVal), Math.abs(minR - correctVal), 1);
               const diff = Math.abs(numVal - correctVal);
               
-              // ככל שההפרש קטן יותר, הניקוד גבוה יותר (מקסימום 1000)
               const accuracy = Math.max(0, 1 - diff / maxPossibleDiff);
               bonus = Math.round(1000 * accuracy * Math.max(0.2, (1 - timeTaken / (currentQ.time_limit || 20))));
             } 
@@ -210,11 +211,6 @@ export default function HostGamePage() {
           }
           return p;
         });
-
-        if (isNewAnswer) {
-          setAnswersCount((prev) => prev + 1);
-        }
-        return updated;
       });
     },
     [questions, currentQuestionIndex]
@@ -303,6 +299,18 @@ export default function HostGamePage() {
     });
   }, [questions, currentQuestionIndex, pinCode]);
 
+  // סיום אוטומטי של השאלה ברגע שכל השחקנים המחוברים ענו
+  useEffect(() => {
+    if (
+      gameState === 'QUESTION' &&
+      players.length > 0 &&
+      answersCount >= players.length
+    ) {
+      endQuestion();
+    }
+  }, [gameState, players.length, answersCount, endQuestion]);
+
+  // ניהול טיימר השאלה
   useEffect(() => {
     if (gameState === 'QUESTION' && timeLeft > 0) {
       timerRef.current = setInterval(() => {
@@ -333,7 +341,6 @@ export default function HostGamePage() {
     if (!q) return;
 
     setCurrentQuestionIndex(index);
-    setAnswersCount(0);
     setTimeLeft(q.time_limit || 20);
     questionStartTimeRef.current = Date.now();
     setGameState('QUESTION');
@@ -630,7 +637,7 @@ export default function HostGamePage() {
                     <div key={idx} className="bg-[#16082d]/80 border border-white/10 p-4 rounded-2xl backdrop-blur-md">
                       <div className="flex justify-between font-bold text-sm mb-2">
                         <span>{idx + 1}. {opt}</span>
-                        <span className="text-fuchsia-300">{votesCount} הצעובות ({percent}%)</span>
+                        <span className="text-fuchsia-300">{votesCount} הצבעות ({percent}%)</span>
                       </div>
                       <div className="w-full bg-white/5 h-3 rounded-full overflow-hidden">
                         <div 
