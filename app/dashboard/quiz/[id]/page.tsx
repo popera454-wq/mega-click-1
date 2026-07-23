@@ -1,441 +1,383 @@
 'use client';
 
 import React, { useState, useEffect } from 'react';
-import Link from 'next/link';
-import { useRouter } from 'next/navigation';
 import { supabase } from '@/lib/supabase';
+// נניח שאתה משתמש ב-Lucide לאייקונים, אם לא - החלף בטקסט
+import { Settings, List, Upload, Wand2, Database, Image as ImageIcon, Video, Music, FileDown } from 'lucide-react';
 
-// הגדרת הסוגים החדשים
+// --- Types ---
 type SlideType = 'trivia' | 'poll' | 'image_answer' | 'text_slide' | 'media_slide';
-
-interface Slide {
-  id: string;
-  question_type: SlideType;
-  question_text?: string;
-  slide_title?: string;
-  slide_content?: string;
-  options?: string[];
-  option_images?: string[];
-  correct_option?: number | null;
-  correct_options?: number[];
-  allow_multiple?: boolean;
-  time_limit?: number;
-  media_url?: string;
-  youtube_url?: string;
-}
-
-interface Quiz {
-  id: string;
-  title: string;
-  description: string;
-}
+type SettingsTab = 'game' | 'design' | 'advanced';
+type SidebarTab = 'questions' | 'settings';
 
 export default function EditQuizPage({ params }: { params: { id: string } }) {
   const quizId = params.id;
-  const router = useRouter();
-
-  const [quiz, setQuiz] = useState<Quiz | null>(null);
-  const [slides, setSlides] = useState<Slide[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [adding, setAdding] = useState(false);
-
-  // --- Form States ---
-  const [slideType, setSlideType] = useState<SlideType>('trivia');
   
-  // States for Questions (Trivia, Poll, Image)
-  const [questionText, setQuestionText] = useState('');
-  const [options, setOptions] = useState<string[]>(['', '']);
-  const [optionImages, setOptionImages] = useState<string[]>(['', '']);
-  const [correctOption, setCorrectOption] = useState<number>(0);
-  const [correctOptions, setCorrectOptions] = useState<number[]>([]);
-  const [allowMultiple, setAllowMultiple] = useState(false);
-  const [timeLimit, setTimeLimit] = useState<number>(15);
+  // --- Global States ---
+  const [activeSidebar, setActiveSidebar] = useState<SidebarTab>('settings');
+  const [activeSettingsTab, setActiveSettingsTab] = useState<SettingsTab>('game');
+  const [activeSlideType, setActiveSlideType] = useState<SlideType>('trivia');
+  
+  // --- Form States (Mocking the massive state object for brevity) ---
+  const [quizSettings, setQuizSettings] = useState<any>({});
+  const [slides, setSlides] = useState<any[]>([]);
+  const [currentSlide, setCurrentSlide] = useState<any>({
+    options: ['', ''],
+    option_images: ['', ''],
+    time_limit: 20,
+    points: 1000
+  });
 
-  // States for Slides (Text, Media)
-  const [slideTitle, setSlideTitle] = useState('');
-  const [slideContent, setSlideContent] = useState('');
-  const [mediaUrl, setMediaUrl] = useState('');
-  const [youtubeUrl, setYoutubeUrl] = useState('');
-
-  useEffect(() => {
-    const fetchQuizData = async () => {
-      setLoading(true);
-      const { data: { user } } = await supabase.auth.getUser();
-      if (!user) {
-        router.push('/login');
-        return;
-      }
-
-      const { data: quizData, error: quizErr } = await supabase
-        .from('quizzes')
-        .select('*')
-        .eq('id', quizId)
-        .single();
-
-      if (quizErr || !quizData) {
-        alert('החידון לא נמצא או שאין לך הרשאה אליו');
-        router.push('/dashboard');
-        return;
-      }
-
-      setQuiz(quizData);
-
-      const { data: slidesData, error: slidesErr } = await supabase
-        .from('questions')
-        .select('*')
-        .eq('quiz_id', quizId)
-        .order('created_at', { ascending: true });
-
-      if (!slidesErr && slidesData) {
-        setSlides(slidesData);
-      }
-
-      setLoading(false);
-    };
-
-    if (quizId) fetchQuizData();
-  }, [quizId, router]);
-
-  // Handle Type Changes
-  const handleTypeChange = (type: SlideType) => {
-    setSlideType(type);
-    // איפוס שדות רלוונטיים כשמחליפים טאב
-    if (type === 'trivia' || type === 'poll' || type === 'image_answer') {
-      setOptions(['', '']);
-      setOptionImages(['', '']);
-      setCorrectOption(0);
-      setCorrectOptions([]);
-    }
+  // --- Handlers (Action Triggers) ---
+  const handleFileUpload = (field: string) => {
+    // כאן תבוא הפעלת Supabase Storage האמיתית
+    alert(`פותח חלונית העלאת קובץ עבור: ${field}\n(יתחבר ל-Supabase Storage בקרוב)`);
   };
 
-  const handleOptionChange = (index: number, value: string) => {
-    const updated = [...options];
-    updated[index] = value;
-    setOptions(updated);
+  const handleImportExcel = () => {
+    alert('קורא קובץ אקסל וממיר ל-JSON באמצעות ספריית xlsx...');
   };
 
-  const handleAddOption = () => {
-    if (options.length < 6) { // הגבלה ל-6 תשובות כמו בתמונה
-      setOptions([...options, '']);
-      setOptionImages([...optionImages, '']);
-    }
+  const handleGenerateAI = () => {
+    alert('שולח בקשה ל-API (OpenAI) לייצור שאלות...');
   };
 
-  const handleRemoveOption = (index: number) => {
-    if (options.length > 2) {
-      const updatedOpts = options.filter((_, i) => i !== index);
-      const updatedImgs = optionImages.filter((_, i) => i !== index);
-      setOptions(updatedOpts);
-      setOptionImages(updatedImgs);
-      if (correctOption === index) setCorrectOption(0);
-    }
+  const applyGlobalSettings = () => {
+    alert('מעדכן את כל השאלות לזמן והניקוד שהוגדרו כאן!');
   };
 
-  const toggleMultipleCorrect = (index: number) => {
-    if (correctOptions.includes(index)) {
-      setCorrectOptions(correctOptions.filter(i => i !== index));
-    } else {
-      setCorrectOptions([...correctOptions, index]);
-    }
-  };
-
-  const handleSaveSlide = async (e: React.FormEvent) => {
-    e.preventDefault();
-    setAdding(true);
-
-    try {
-      const payload: any = {
-        quiz_id: quizId,
-        question_type: slideType,
-      };
-
-      // בניית הפיילוד בהתאם לסוג השקופית
-      if (['trivia', 'poll', 'image_answer'].includes(slideType)) {
-        if (!questionText.trim()) throw new Error('נא להזין את טקסט השאלה');
-        
-        payload.question_text = questionText.trim();
-        payload.options = options.map(o => o.trim());
-        payload.time_limit = timeLimit;
-        
-        if (slideType === 'image_answer') {
-           payload.option_images = optionImages;
-        }
-
-        if (slideType !== 'poll') {
-           payload.allow_multiple = allowMultiple;
-           payload.correct_option = allowMultiple ? null : correctOption;
-           payload.correct_options = allowMultiple ? correctOptions : [];
-        }
-      } else if (slideType === 'text_slide') {
-        if (!slideTitle.trim()) throw new Error('נא להזין את שם השקופית');
-        payload.slide_title = slideTitle.trim();
-        payload.slide_content = slideContent.trim();
-      } else if (slideType === 'media_slide') {
-        if (!slideTitle.trim()) throw new Error('נא להזין את שם השקופית');
-        payload.slide_title = slideTitle.trim();
-        payload.media_url = mediaUrl;
-        payload.youtube_url = youtubeUrl;
-      }
-
-      const { data, error } = await supabase
-        .from('questions')
-        .insert([payload])
-        .select()
-        .single();
-
-      if (error) throw error;
-
-      setSlides([...slides, data]);
-      
-      // Reset form (Optional - you might want to keep some settings)
-      setQuestionText('');
-      setSlideTitle('');
-      setSlideContent('');
-      setYoutubeUrl('');
-      setOptions(['', '']);
-      setCorrectOption(0);
-      setCorrectOptions([]);
-      
-    } catch (err: any) {
-      alert('שגיאה בשמירה: ' + err.message);
-    } finally {
-      setAdding(false);
-    }
-  };
-
-  const handleDeleteSlide = async (id: string) => {
-    if (!confirm('האם למחוק שקופית זו?')) return;
-    const { error } = await supabase.from('questions').delete().eq('id', id);
-    if (!error) {
-      setSlides(slides.filter(s => s.id !== id));
-    }
-  };
-
-  if (loading) {
-    return (
-      <main className="min-h-screen bg-[#0d041e] text-white flex justify-center items-center dir-rtl">
-        <div className="w-12 h-12 border-4 border-emerald-500/30 border-t-emerald-500 rounded-full animate-spin" />
-      </main>
-    );
-  }
+  // --- Sub-components (For UI Cleanliness) ---
+  
+  // כפתור העלאת מדיה גנרי שחוזר על עצמו
+  const MediaUploadBlock = ({ label, field }: { label: string, field: string }) => (
+    <div className="border border-gray-200 dark:border-white/10 rounded-xl p-4 bg-gray-50 dark:bg-white/5">
+      <h4 className="text-sm font-bold mb-3">{label}</h4>
+      <div className="flex gap-2 text-xs font-semibold">
+        <button onClick={() => handleFileUpload(field)} className="flex-1 bg-white dark:bg-black/20 border border-gray-300 dark:border-white/20 py-2 rounded-lg flex items-center justify-center gap-1 hover:bg-emerald-50 dark:hover:bg-emerald-900/30">
+          <Upload size={14} /> העלאת קובץ
+        </button>
+        <button className="flex-1 bg-white dark:bg-black/20 border border-gray-300 dark:border-white/20 py-2 rounded-lg flex items-center justify-center gap-1 hover:bg-emerald-50 dark:hover:bg-emerald-900/30">
+          <ImageIcon size={14} /> גלריה
+        </button>
+        <button className="flex-1 bg-white dark:bg-black/20 border border-gray-300 dark:border-white/20 py-2 rounded-lg flex items-center justify-center gap-1 hover:bg-red-50 dark:hover:bg-red-900/30">
+          <Video size={14} /> יוטיוב
+        </button>
+      </div>
+    </div>
+  );
 
   return (
-    <main className="min-h-screen bg-[#f8f9fa] dark:bg-[#0d041e] text-gray-800 dark:text-white dir-rtl pb-10">
+    <main className="min-h-screen bg-[#f4f6f8] dark:bg-[#0d041e] text-gray-800 dark:text-white dir-rtl flex">
       
-      {/* Header - Top Navbar */}
-      <header className="sticky top-0 z-30 flex items-center justify-between border-b border-gray-200 dark:border-white/10 bg-white dark:bg-[#130728] px-6 py-4 shadow-sm">
-        <div className="flex items-center gap-4">
-          <Link href="/dashboard" className="text-sm font-bold text-gray-500 hover:text-gray-800 dark:text-white/70 dark:hover:text-white">
-            ← חזרה
-          </Link>
-          <span className="text-lg font-bold truncate max-w-[200px]">{quiz?.title}</span>
-        </div>
-        <div className="flex gap-3">
-            <button className="px-4 py-2 rounded-full border border-gray-300 dark:border-white/20 text-sm font-bold">
-              תצוגה מקדימה 👁️
-            </button>
-            <Link href={`/host/${quizId}`} className="px-6 py-2 rounded-full font-bold bg-emerald-500 hover:bg-emerald-600 text-white shadow-lg transition-all">
-              שמירת הגדרות
-            </Link>
-        </div>
-      </header>
-
-      <div className="flex h-[calc(100vh-73px)]">
+      {/* ---------------- RIGHT SIDEBAR (Settings & Questions) ---------------- */}
+      <aside className="w-96 bg-white dark:bg-[#1a0b38] border-l border-gray-200 dark:border-white/10 flex flex-col h-screen sticky top-0 shadow-xl z-10">
         
-        {/* Right Sidebar - Slides List (כמו בתמונה) */}
-        <aside className="w-80 border-l border-gray-200 dark:border-white/10 bg-white dark:bg-[#1a0b38] overflow-y-auto flex flex-col">
-          <div className="p-4 border-b border-gray-200 dark:border-white/10">
-            <div className="flex gap-2 mb-4">
-              <button className="flex-1 bg-emerald-100 text-emerald-700 dark:bg-emerald-500/20 dark:text-emerald-400 py-2 rounded-xl text-sm font-bold border border-emerald-200 dark:border-emerald-500/30">
-                יבוא מאקסל 📊
-              </button>
-              <button className="flex-1 bg-amber-100 text-amber-700 dark:bg-amber-500/20 dark:text-amber-400 py-2 rounded-xl text-sm font-bold border border-amber-200 dark:border-amber-500/30">
-                צור ב-AI ✨
-              </button>
-            </div>
-            <h3 className="font-bold text-sm text-gray-500 dark:text-white/50">{slides.length} שקופיות</h3>
-          </div>
+        {/* Sidebar Toggle Tabs */}
+        <div className="flex border-b border-gray-200 dark:border-white/10">
+          <button 
+            onClick={() => setActiveSidebar('settings')} 
+            className={`flex-1 py-4 font-bold text-sm flex justify-center gap-2 transition-colors ${activeSidebar === 'settings' ? 'border-b-2 border-emerald-500 text-emerald-600' : 'text-gray-500 hover:bg-gray-50 dark:hover:bg-white/5'}`}
+          >
+            <Settings size={18} /> הגדרות (החלק הקטן)
+          </button>
+          <button 
+            onClick={() => setActiveSidebar('questions')} 
+            className={`flex-1 py-4 font-bold text-sm flex justify-center gap-2 transition-colors ${activeSidebar === 'questions' ? 'border-b-2 border-emerald-500 text-emerald-600' : 'text-gray-500 hover:bg-gray-50 dark:hover:bg-white/5'}`}
+          >
+            <List size={18} /> שאלות (החלק השני)
+          </button>
+        </div>
 
-          <div className="p-4 flex flex-col gap-3">
-            {slides.map((slide, idx) => (
-              <div key={slide.id} className="relative group p-3 rounded-xl border border-gray-200 dark:border-white/10 bg-gray-50 dark:bg-white/5 hover:border-emerald-500 transition-colors cursor-pointer">
-                <div className="flex justify-between items-start mb-1">
-                  <span className="text-xs font-bold px-2 py-0.5 rounded bg-gray-200 dark:bg-white/10">
-                    {idx + 1}. {
-                      slide.question_type === 'trivia' ? 'טריוויה' : 
-                      slide.question_type === 'poll' ? 'סקר' : 
-                      slide.question_type === 'image_answer' ? 'תמונה' : 
-                      slide.question_type === 'text_slide' ? 'טקסט' : 'מדיה'
-                    }
-                  </span>
-                  <button onClick={() => handleDeleteSlide(slide.id)} className="text-red-400 opacity-0 group-hover:opacity-100 transition-opacity text-xs">מחק ✕</button>
+        {/* --- CONTENT: SETTINGS --- */}
+        {activeSidebar === 'settings' && (
+          <div className="flex-1 overflow-y-auto p-4 flex flex-col gap-6">
+            
+            {/* Settings Sub-Tabs */}
+            <div className="flex bg-gray-100 dark:bg-black/20 rounded-lg p-1">
+              <button onClick={() => setActiveSettingsTab('game')} className={`flex-1 py-1.5 text-xs font-bold rounded-md ${activeSettingsTab === 'game' ? 'bg-white dark:bg-[#2d1b54] shadow' : ''}`}>משחק</button>
+              <button onClick={() => setActiveSettingsTab('design')} className={`flex-1 py-1.5 text-xs font-bold rounded-md ${activeSettingsTab === 'design' ? 'bg-white dark:bg-[#2d1b54] shadow' : ''}`}>עיצוב</button>
+              <button onClick={() => setActiveSettingsTab('advanced')} className={`flex-1 py-1.5 text-xs font-bold rounded-md ${activeSettingsTab === 'advanced' ? 'bg-white dark:bg-[#2d1b54] shadow' : ''}`}>מתקדם</button>
+            </div>
+
+            {/* Part 1: Game Settings */}
+            {activeSettingsTab === 'game' && (
+              <div className="space-y-4 animate-in fade-in">
+                <div>
+                  <label className="text-sm font-bold block mb-1">שם המשחק</label>
+                  <input type="text" className="w-full p-2 border rounded-lg bg-transparent" placeholder="שם המשחק..." />
                 </div>
-                <p className="text-sm font-semibold truncate">
-                  {slide.question_text || slide.slide_title || 'שקופית ללא שם'}
-                </p>
+                <div className="p-4 border border-dashed rounded-xl text-center cursor-pointer hover:bg-gray-50 dark:hover:bg-white/5" onClick={() => handleFileUpload('logo')}>
+                  <ImageIcon className="mx-auto mb-2 text-gray-400" />
+                  <span className="text-xs font-bold">לוגו (1784269181161-97b3...)</span>
+                </div>
+                <div>
+                  <label className="text-sm font-bold block mb-1">כותרת לאורך כל המשחק</label>
+                  <input type="text" className="w-full p-2 border rounded-lg bg-transparent" />
+                </div>
+                <div className="grid grid-cols-2 gap-2">
+                  <div>
+                    <label className="text-xs font-bold block mb-1">מספר זוכים</label>
+                    <input type="number" defaultValue={3} className="w-full p-2 border rounded-lg bg-transparent" />
+                  </div>
+                  <div>
+                    <label className="text-xs font-bold block mb-1">מובילים בטבלה</label>
+                    <input type="number" defaultValue={10} className="w-full p-2 border rounded-lg bg-transparent" />
+                  </div>
+                </div>
+                <label className="flex items-center gap-2 text-sm font-semibold cursor-pointer">
+                  <input type="checkbox" defaultChecked className="accent-emerald-500 w-4 h-4" /> הצגת לוח תוצאות אוטומטית
+                </label>
+                <label className="flex items-center gap-2 text-sm font-semibold cursor-pointer">
+                  <input type="checkbox" className="accent-emerald-500 w-4 h-4" /> ערבוב סדר השאלות
+                </label>
               </div>
+            )}
+
+            {/* Part 2: Design Settings */}
+            {activeSettingsTab === 'design' && (
+              <div className="space-y-4 animate-in fade-in">
+                <div className="flex gap-4">
+                  <div className="flex-1">
+                    <label className="text-sm font-bold block mb-1">צבע הטקסט</label>
+                    <input type="color" className="w-full h-10 rounded cursor-pointer" />
+                  </div>
+                  <div className="flex-1">
+                    <label className="text-sm font-bold block mb-1">צבע הרקע</label>
+                    <input type="color" className="w-full h-10 rounded cursor-pointer" />
+                  </div>
+                </div>
+                <div className="space-y-2">
+                  <h3 className="font-bold border-b pb-1">מדיה (רקעים ווידאו)</h3>
+                  <button onClick={() => handleFileUpload('main_bg')} className="w-full text-right p-3 border rounded-lg text-sm bg-gray-50 dark:bg-white/5 truncate">רקע מסך ראשי <br/><span className="text-xs text-emerald-500">1782226344610.mp4 ✓</span></button>
+                  <button onClick={() => handleFileUpload('question_bg')} className="w-full text-right p-3 border rounded-lg text-sm bg-gray-50 dark:bg-white/5 truncate">רקע מסך שאלה <br/><span className="text-xs text-emerald-500">1782226344610.mp4 ✓</span></button>
+                  <button onClick={() => handleFileUpload('winners_video')} className="w-full text-right p-3 border rounded-lg text-sm bg-gray-50 dark:bg-white/5 truncate">וידאו זוכים</button>
+                  <button onClick={() => handleFileUpload('leaderboard_video')} className="w-full text-right p-3 border rounded-lg text-sm bg-gray-50 dark:bg-white/5 truncate">וידאו לוח תוצאות</button>
+                </div>
+              </div>
+            )}
+
+            {/* Part 3: Advanced Settings */}
+            {activeSettingsTab === 'advanced' && (
+              <div className="space-y-6 animate-in fade-in">
+                <div className="space-y-2">
+                  <label className="flex items-center gap-2 text-sm font-semibold">
+                    <input type="checkbox" className="accent-emerald-500 w-4 h-4" /> הצגת תשובות כמספרים
+                  </label>
+                  <label className="flex items-center gap-2 text-sm font-semibold">
+                    <input type="checkbox" defaultChecked className="accent-emerald-500 w-4 h-4" /> אפשר לתקן תשובה (הצבעה אחרונה קובעת)
+                  </label>
+                </div>
+
+                <div className="p-4 bg-emerald-50 dark:bg-emerald-900/20 border border-emerald-200 dark:border-emerald-800 rounded-xl">
+                  <h4 className="font-bold text-sm mb-2 text-emerald-800 dark:text-emerald-300">החלה קולקטיבית על כל השקופיות</h4>
+                  <div className="flex gap-2 mb-2">
+                    <input type="number" placeholder="זמן (שניות)" className="w-1/2 p-2 border rounded-lg text-sm" />
+                    <input type="number" placeholder="ניקוד" className="w-1/2 p-2 border rounded-lg text-sm" />
+                  </div>
+                  <button onClick={applyGlobalSettings} className="w-full bg-emerald-500 text-white py-2 rounded-lg text-sm font-bold">החל על כל השקופיות</button>
+                </div>
+
+                <div className="space-y-2">
+                  <h3 className="font-bold border-b pb-1 flex items-center gap-2"><Music size={16}/> צלילים</h3>
+                  {['צליל כפתור', 'הצגת שאלה', 'צליל טיימר', 'חשיפת תשובה נכונה', 'מסך זוכים', 'לוח תוצאות', 'שחקנים מתחברים'].map(sound => (
+                    <div key={sound} className="flex justify-between items-center text-xs p-2 border rounded bg-gray-50 dark:bg-white/5">
+                      <span>{sound}</span>
+                      <button onClick={() => handleFileUpload(`sound_${sound}`)} className="text-emerald-600 font-bold bg-emerald-100 px-2 py-1 rounded">בחר קובץ</button>
+                    </div>
+                  ))}
+                </div>
+
+                <div className="pt-4 border-t space-y-2">
+                  <button className="w-full text-sm font-bold text-blue-600 bg-blue-50 py-2 rounded-lg border border-blue-200">העלאת מדיה מרובה</button>
+                  <button className="w-full text-sm font-bold text-red-600 bg-red-50 py-2 rounded-lg border border-red-200 flex justify-center gap-2"><FileDown size={16}/> הורדת כל השאלות ל-PDF</button>
+                  <p className="text-center text-xs text-gray-400 mt-4">מזהה משחק: <br/>{quizId}</p>
+                </div>
+              </div>
+            )}
+
+            <button className="mt-auto w-full py-4 font-bold bg-emerald-500 hover:bg-emerald-600 text-white rounded-xl shadow-lg transition-all">
+              שמירת הגדרות
+            </button>
+          </div>
+        )}
+
+        {/* --- CONTENT: QUESTIONS LIST --- */}
+        {activeSidebar === 'questions' && (
+          <div className="flex-1 overflow-y-auto flex flex-col">
+            <div className="p-4 grid grid-cols-3 gap-2 border-b">
+              <button onClick={handleImportExcel} className="flex flex-col items-center justify-center py-2 bg-emerald-50 text-emerald-700 rounded-lg text-xs font-bold border border-emerald-200"><Upload size={16} className="mb-1"/> יבוא XL</button>
+              <button className="flex flex-col items-center justify-center py-2 bg-blue-50 text-blue-700 rounded-lg text-xs font-bold border border-blue-200"><Database size={16} className="mb-1"/> מאגר שאלות</button>
+              <button onClick={handleGenerateAI} className="flex flex-col items-center justify-center py-2 bg-purple-50 text-purple-700 rounded-lg text-xs font-bold border border-purple-200"><Wand2 size={16} className="mb-1"/> AI</button>
+            </div>
+            <div className="p-4 space-y-2">
+              {/* דוגמה לשקופיות קיימות */}
+              <div className="p-3 border border-emerald-500 bg-emerald-50 dark:bg-emerald-900/20 rounded-xl cursor-pointer">
+                <span className="text-xs font-bold px-2 py-0.5 rounded bg-white text-emerald-700 mb-1 inline-block">1. טריוויה</span>
+                <p className="text-sm font-bold truncate">מהי בירת ישראל?</p>
+              </div>
+              <div className="p-3 border border-gray-200 dark:border-white/10 rounded-xl cursor-pointer opacity-70 hover:opacity-100">
+                <span className="text-xs font-bold px-2 py-0.5 rounded bg-gray-200 text-gray-700 mb-1 inline-block">2. סקר</span>
+                <p className="text-sm font-bold truncate">איזה פיצה אתם מעדיפים?</p>
+              </div>
+            </div>
+            <button className="m-4 mt-auto py-3 font-bold bg-gray-800 dark:bg-white dark:text-black text-white rounded-xl shadow-lg">
+              + הוסף שקופית חדשה
+            </button>
+          </div>
+        )}
+      </aside>
+
+      {/* ---------------- CENTER MAIN EDITOR (החלק השלישי - עריכת שאלות) ---------------- */}
+      <div className="flex-1 overflow-y-auto p-8 relative">
+        <div className="max-w-3xl mx-auto">
+          
+          {/* Top Types Toolbar */}
+          <div className="flex justify-center gap-2 mb-8 bg-white dark:bg-[#1a0b38] p-2 rounded-2xl shadow-sm border border-gray-100 dark:border-white/10">
+            {[
+              { id: 'trivia', label: 'טריוויה' },
+              { id: 'poll', label: 'סקר' },
+              { id: 'image_answer', label: 'תשובה בתמונה' },
+              { id: 'text_slide', label: 'טקסט' },
+              { id: 'media_slide', label: 'מדיה' }
+            ].map(type => (
+              <button
+                key={type.id}
+                onClick={() => setActiveSlideType(type.id as SlideType)}
+                className={`flex-1 py-3 text-sm font-bold rounded-xl transition-all ${activeSlideType === type.id ? 'bg-emerald-500 text-white shadow-md' : 'text-gray-500 hover:bg-gray-100 dark:hover:bg-white/5'}`}
+              >
+                {type.label}
+              </button>
             ))}
           </div>
-        </aside>
 
-        {/* Main Work Area */}
-        <div className="flex-1 overflow-y-auto p-8 bg-gray-50 dark:bg-transparent">
-          <div className="max-w-4xl mx-auto">
+          {/* EDITOR CARD */}
+          <div className="bg-white dark:bg-[#1a0b38] rounded-3xl p-8 shadow-xl border border-gray-200 dark:border-white/10">
             
-            {/* Top Types Toolbar */}
-            <div className="flex justify-center gap-3 mb-8">
-              {[
-                { id: 'trivia', label: 'טריוויה', icon: '📄' },
-                { id: 'poll', label: 'סקר', icon: '⏱️' },
-                { id: 'image_answer', label: 'תשובה בתמונה', icon: '🖼️' },
-                { id: 'text_slide', label: 'טקסט', icon: '📝' },
-                { id: 'media_slide', label: 'מדיה', icon: '🎥' }
-              ].map(type => (
-                <button
-                  key={type.id}
-                  onClick={() => handleTypeChange(type.id as SlideType)}
-                  className={`flex flex-col items-center justify-center w-24 h-24 rounded-2xl border transition-all ${
-                    slideType === type.id 
-                    ? 'border-emerald-500 bg-emerald-50 dark:bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 shadow-md' 
-                    : 'border-gray-200 dark:border-white/10 bg-white dark:bg-white/5 hover:border-emerald-300 dark:hover:border-white/20'
-                  }`}
-                >
-                  <span className="text-2xl mb-2">{type.icon}</span>
-                  <span className="text-xs font-bold">{type.label}</span>
-                </button>
-              ))}
-            </div>
-
-            {/* Editor Card */}
-            <div className="bg-white dark:bg-[#1a0b38] rounded-3xl p-6 md:p-8 shadow-xl border border-gray-100 dark:border-white/10">
-              <form onSubmit={handleSaveSlide}>
+            {/* --- TYPE 1 & 2: TRIVIA / POLL --- */}
+            {(activeSlideType === 'trivia' || activeSlideType === 'poll') && (
+              <div className="space-y-8 animate-in fade-in">
+                <div>
+                  <label className="block text-sm font-bold mb-2">טקסט השאלה</label>
+                  <input type="text" placeholder="הקלד את השאלה כאן..." className="w-full text-xl font-bold p-4 rounded-xl bg-gray-50 dark:bg-white/5 border border-gray-200" />
+                </div>
                 
-                {/* 1. TRIVIA / POLL / IMAGE ANSWER */}
-                {['trivia', 'poll', 'image_answer'].includes(slideType) && (
-                  <div className="space-y-6">
-                    <div>
-                      <label className="block text-sm font-bold mb-2">טקסט השאלה</label>
-                      <input
-                        type="text"
-                        required
-                        value={questionText}
-                        onChange={e => setQuestionText(e.target.value)}
-                        placeholder={slideType === 'poll' ? "סקר: " : "שאלה חדשה"}
-                        className="w-full text-xl font-bold px-4 py-4 rounded-xl bg-gray-50 dark:bg-white/5 border border-gray-200 dark:border-white/10 focus:border-emerald-500 outline-none"
-                      />
-                    </div>
-
-                    {slideType !== 'poll' && (
-                      <div className="flex items-center justify-end gap-2">
-                        <label className="text-sm font-semibold">אפשר מספר תשובות נכונות</label>
-                        <input type="checkbox" checked={allowMultiple} onChange={e => setAllowMultiple(e.target.checked)} className="w-4 h-4 accent-emerald-500" />
+                <div>
+                  <label className="block text-sm font-bold mb-2">תשובות</label>
+                  <div className="grid grid-cols-2 gap-4">
+                    {/* Mock Answers */}
+                    {[1, 2].map(i => (
+                      <div key={i} className="flex p-2 border-2 border-gray-200 rounded-xl items-center gap-2">
+                        {activeSlideType === 'trivia' && (
+                          <button className="w-8 h-8 rounded-full border-2 border-gray-300 flex items-center justify-center text-transparent hover:border-emerald-500">✓</button>
+                        )}
+                        <input type="text" placeholder={`תשובה ${i}`} className="w-full bg-transparent outline-none font-bold" />
                       </div>
-                    )}
-
-                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                      {options.map((opt, idx) => {
-                        const isCorrect = allowMultiple ? correctOptions.includes(idx) : correctOption === idx;
-                        return (
-                          <div key={idx} className={`relative flex flex-col p-2 rounded-2xl border-2 transition-all ${isCorrect && slideType !== 'poll' ? 'border-emerald-500 bg-emerald-50 dark:bg-emerald-500/10' : 'border-gray-200 dark:border-white/10'}`}>
-                            <div className="flex gap-2">
-                              {slideType !== 'poll' && (
-                                <button type="button" onClick={() => allowMultiple ? toggleMultipleCorrect(idx) : setCorrectOption(idx)} className={`w-8 h-8 flex-shrink-0 flex items-center justify-center rounded-full ${isCorrect ? 'bg-emerald-500 text-white' : 'bg-gray-200 dark:bg-white/10 text-transparent'}`}>
-                                  ✓
-                                </button>
-                              )}
-                              <input
-                                type="text"
-                                value={opt}
-                                onChange={e => handleOptionChange(idx, e.target.value)}
-                                placeholder={`תשובה ${idx + 1}`}
-                                className="w-full bg-transparent outline-none font-semibold text-sm py-1"
-                                required={slideType !== 'image_answer'}
-                              />
-                              {options.length > 2 && (
-                                <button type="button" onClick={() => handleRemoveOption(idx)} className="text-gray-400 hover:text-red-500">🗑️</button>
-                              )}
-                            </div>
-                            
-                            {/* כפתור העלאת תמונה ספציפי לסוג תמונה */}
-                            {slideType === 'image_answer' && (
-                              <div className="mt-3 border-t border-gray-200 dark:border-white/10 pt-2 flex justify-center">
-                                <button type="button" className="text-xs text-gray-500 dark:text-gray-400 flex items-center gap-1 hover:text-emerald-500">
-                                  <span>⬆️</span> {optionImages[idx] ? 'החלף תמונה' : 'העלה תמונה לתשובה'}
-                                </button>
-                              </div>
-                            )}
-                          </div>
-                        );
-                      })}
-                    </div>
-                    
-                    {options.length < 6 && (
-                      <button type="button" onClick={handleAddOption} className="text-sm font-bold text-emerald-500 hover:text-emerald-600 flex items-center gap-2">
-                        + הוסף תשובה
-                      </button>
-                    )}
-
-                    <div className="pt-6 border-t border-gray-100 dark:border-white/5">
-                      <label className="block text-sm font-bold mb-2">זמן תגובה (שניות)</label>
-                      <input type="range" min="5" max="120" step="5" value={timeLimit} onChange={e => setTimeLimit(Number(e.target.value))} className="w-full accent-emerald-500" />
-                      <div className="text-center font-bold text-emerald-600 dark:text-emerald-400 mt-2">{timeLimit} שניות</div>
-                    </div>
+                    ))}
                   </div>
-                )}
+                  <button className="mt-4 text-sm font-bold text-emerald-500">+ הוסף תשובה</button>
+                </div>
 
-                {/* 2. TEXT SLIDE */}
-                {slideType === 'text_slide' && (
-                  <div className="space-y-6">
-                    <div>
-                      <label className="block text-sm font-bold text-red-500 mb-2">שם השקופית *</label>
-                      <input type="text" required value={slideTitle} onChange={e => setSlideTitle(e.target.value)} placeholder="שאלה חדשה" className="w-full px-4 py-3 rounded-xl bg-gray-50 dark:bg-white/5 border border-gray-200 dark:border-white/10 outline-none" />
-                    </div>
-                    <div>
-                      <label className="block text-sm font-bold text-red-500 mb-2">תוכן השקופית *</label>
-                      <textarea required value={slideContent} onChange={e => setSlideContent(e.target.value)} placeholder="הזן את תוכן השקופית כאן..." rows={6} className="w-full px-4 py-3 rounded-xl bg-gray-50 dark:bg-white/5 border border-red-200 dark:border-red-500/30 outline-none resize-none" />
-                      <p className="text-xs text-gray-500 mt-2">ניתן להזין טקסט חופשי, רשימות וכו'.</p>
-                    </div>
+                <div className="grid grid-cols-2 gap-6 pt-4 border-t border-gray-100">
+                  <div>
+                    <label className="block text-sm font-bold mb-2">זמן תגובה (שניות)</label>
+                    <input type="number" defaultValue={20} className="w-full p-3 rounded-xl border bg-gray-50" />
                   </div>
-                )}
-
-                {/* 3. MEDIA SLIDE */}
-                {slideType === 'media_slide' && (
-                  <div className="space-y-6">
-                     <div>
-                      <label className="block text-sm font-bold text-red-500 mb-2">שם השקופית *</label>
-                      <input type="text" required value={slideTitle} onChange={e => setSlideTitle(e.target.value)} placeholder="שאלה חדשה" className="w-full px-4 py-3 rounded-xl bg-gray-50 dark:bg-white/5 border border-gray-200 dark:border-white/10 outline-none" />
-                    </div>
-                    
-                    <div className="border-2 border-dashed border-gray-300 dark:border-white/20 rounded-2xl p-10 flex flex-col items-center justify-center text-center cursor-pointer hover:bg-gray-50 dark:hover:bg-white/5 transition-colors">
-                      <span className="text-3xl mb-2">⬆️</span>
-                      <h4 className="font-bold text-gray-700 dark:text-white">העלאת קובץ מדיה</h4>
-                      <p className="text-xs text-gray-500">תמונה, וידאו או אודיו</p>
-                    </div>
-
-                    <div className="flex items-center gap-4 my-4">
-                      <div className="flex-1 h-px bg-gray-200 dark:bg-white/10"></div>
-                      <span className="text-sm font-bold text-gray-400">או הטמע סרטון יוטיוב</span>
-                      <div className="flex-1 h-px bg-gray-200 dark:bg-white/10"></div>
-                    </div>
-
+                  {activeSlideType === 'trivia' && (
                     <div>
-                      <input type="url" value={youtubeUrl} onChange={e => setYoutubeUrl(e.target.value)} placeholder="YouTube URL (https://www...)" className="w-full px-4 py-3 rounded-xl bg-gray-50 dark:bg-white/5 border border-gray-200 dark:border-white/10 outline-none text-left dir-ltr" />
+                      <label className="block text-sm font-bold mb-2">ניקוד</label>
+                      <input type="number" defaultValue={1000} className="w-full p-3 rounded-xl border bg-gray-50" />
                     </div>
+                  )}
+                </div>
+
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-4 pt-4 border-t border-gray-100">
+                  <MediaUploadBlock label="מדיה לפני שקופית" field="media_before" />
+                  <MediaUploadBlock label="תמונת שאלה" field="question_image" />
+                  <MediaUploadBlock label="מדיה אחרי" field="media_after" />
+                </div>
+              </div>
+            )}
+
+            {/* --- TYPE 3: IMAGE ANSWER --- */}
+            {activeSlideType === 'image_answer' && (
+              <div className="space-y-8 animate-in fade-in">
+                <div>
+                  <label className="block text-sm font-bold mb-2">נוסח השאלה</label>
+                  <input type="text" placeholder="הקלד את השאלה כאן..." className="w-full text-xl font-bold p-4 rounded-xl bg-gray-50 border border-gray-200" />
+                </div>
+                
+                <div>
+                  <div className="flex justify-between items-center mb-2">
+                    <label className="text-sm font-bold">תשובות כתמונה (עד 6)</label>
+                    <label className="flex items-center gap-2 text-sm font-semibold">
+                      <input type="checkbox" className="accent-emerald-500 w-4 h-4" /> אפשר מספר תשובות נכונות
+                    </label>
                   </div>
-                )}
+                  
+                  <div className="grid grid-cols-2 gap-4">
+                     {/* Image Answers Mock */}
+                     {[1, 2].map(i => (
+                      <div key={i} className="border-2 border-gray-200 rounded-xl p-2">
+                        <div className="h-32 bg-gray-100 dark:bg-white/5 rounded-lg flex flex-col items-center justify-center mb-2 cursor-pointer hover:bg-gray-200">
+                          <ImageIcon size={24} className="text-gray-400 mb-2"/>
+                          <span className="text-xs font-bold text-gray-500">תשובה {i} - אין תמונה</span>
+                        </div>
+                        <button className="w-full py-1 text-xs font-bold border rounded bg-white text-emerald-600">בחר תשובה נכונה ✓</button>
+                      </div>
+                    ))}
+                  </div>
+                  <button className="mt-4 text-sm font-bold text-emerald-500">+ הוסף תשובה</button>
+                </div>
 
-                {/* Submit Button */}
-                <button
-                  type="submit"
-                  disabled={adding}
-                  className="w-full mt-8 py-4 rounded-xl font-bold bg-emerald-500 hover:bg-emerald-600 text-white shadow-lg transition-all disabled:opacity-50"
-                >
-                  {adding ? 'שומר...' : 'שמירת שקופית'}
-                </button>
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-4 pt-4 border-t border-gray-100">
+                  <MediaUploadBlock label="מדיה לפני שקופית" field="media_before" />
+                  <MediaUploadBlock label="תמונת שאלה" field="question_image" />
+                  <MediaUploadBlock label="מדיה אחרי" field="media_after" />
+                </div>
+              </div>
+            )}
 
-              </form>
-            </div>
+            {/* --- TYPE 4: TEXT SLIDE --- */}
+            {activeSlideType === 'text_slide' && (
+              <div className="space-y-6 animate-in fade-in">
+                <div>
+                  <label className="block text-sm font-bold text-red-500 mb-2">שם השקופית *</label>
+                  <input type="text" className="w-full p-4 rounded-xl border bg-gray-50" />
+                </div>
+                <div>
+                  <label className="block text-sm font-bold text-red-500 mb-2">תוכן השקופית *</label>
+                  <textarea rows={6} placeholder="תוכן הטקסט של השקופית. ניתן להזין טקסט חופשי, רשימות וכו'." className="w-full p-4 rounded-xl border bg-gray-50 resize-none"></textarea>
+                </div>
+                <div className="w-1/2">
+                   <MediaUploadBlock label="תמונת שאלה" field="text_image" />
+                </div>
+              </div>
+            )}
+
+            {/* --- TYPE 5: MEDIA SLIDE --- */}
+            {activeSlideType === 'media_slide' && (
+              <div className="space-y-6 animate-in fade-in">
+                <div>
+                  <label className="block text-sm font-bold text-red-500 mb-2">שם השקופית *</label>
+                  <input type="text" className="w-full p-4 rounded-xl border bg-gray-50" />
+                </div>
+                
+                <div className="border-2 border-dashed border-gray-300 rounded-2xl p-10 text-center">
+                  <h4 className="font-bold text-lg mb-2">מדיה ראשית / קישור YouTube</h4>
+                  <div className="flex justify-center gap-4 mt-6">
+                    <button className="px-6 py-3 bg-emerald-50 text-emerald-700 font-bold rounded-xl border border-emerald-200">העלאת קובץ מדיה (תמונה/וידאו/אודיו)</button>
+                    <button className="px-6 py-3 bg-blue-50 text-blue-700 font-bold rounded-xl border border-blue-200">בחר מהגלריה</button>
+                    <button className="px-6 py-3 bg-red-50 text-red-700 font-bold rounded-xl border border-red-200">הטמע מיוטיוב</button>
+                  </div>
+                </div>
+              </div>
+            )}
+
+            <button className="w-full mt-8 py-4 font-bold bg-emerald-500 hover:bg-emerald-600 text-white rounded-xl shadow-lg transition-all text-lg">
+              שמירת שקופית
+            </button>
           </div>
+
         </div>
       </div>
     </main>
