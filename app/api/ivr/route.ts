@@ -14,7 +14,7 @@ export async function GET(req: Request) {
   const answer = searchParams.get('answer');
 
   // -------------------------------------------------------------
-  // 1. קליטת PIN ראשונית (6 ספרות - Digits ללא אישורים)
+  // 1. קליטת PIN ראשונית (6 ספרות)
   // -------------------------------------------------------------
   if (!pin) {
     return new Response(
@@ -24,31 +24,29 @@ export async function GET(req: Request) {
   }
 
   // -------------------------------------------------------------
-  // 2. כניסה לשלט אילם (מיד לאחר קליטת ה-PIN)
+  // 2. כניסה לשלט אילם (מיד לאחר התחברות)
   // -------------------------------------------------------------
   if (pin && !answer) {
-    // רישום השחקן
     await supabase.from('game_players').upsert({
       game_pin: pin,
       player_name: `טלפון ${phone.slice(-4)}`,
       phone: phone,
     });
 
-    // Digits במקום Number מונע לחלוטין בקשות אישור קוליות!
     return new Response(
-      `read=t- =answer,tap,1,1,3600,Digits,no,no,no&pin=${pin}`,
+      `read=t-א=answer,tap,1,1,3600,Digits,no,no,no&pin=${pin}`,
       { headers: { 'Content-Type': 'text/plain; charset=utf-8' } }
     );
   }
 
   // -------------------------------------------------------------
-  // 3. קליטת תשובה (1-4) + חישוב זמן דינמי בלייב
+  // 3. קליטת תשובה (1-4) + חישוב זמן אמת
   // -------------------------------------------------------------
   if (pin && answer) {
     const now = Date.now();
     const answerIndex = Number(answer) - 1; // המרה מ-1..4 ל-0..3
 
-    // א. שליפת נתוני השאלה הפעילה
+    // א. שליפת זמן פתיחת השאלה מ-Supabase
     const { data: activeGame } = await supabase
       .from('games')
       .select('current_question_index, updated_at')
@@ -57,22 +55,19 @@ export async function GET(req: Request) {
 
     const currentQuestionIndex = activeGame?.current_question_index ?? 0;
     
-    // ב. חישוב זמן מענה דינמי (timeTaken)
-    let timeTaken = 0.8; // ברירת מחדל התחלתית
+    // ב. חישוב זמן מענה דינמי בשניות (לדוגמה 1.35 שניות)
+    let timeTaken = 1.0;
     if (activeGame?.updated_at) {
       const questionStartTime = new Date(activeGame.updated_at).getTime();
       const diffInSeconds = (now - questionStartTime) / 1000;
       
-      // אם הזמן הגיוני (בין 0.1 ל-60 שניות)
-      if (diffInSeconds > 0.1 && diffInSeconds < 60) {
+      // מקבלים את הזמן האמיתי שחלף מרגע פתיחת השאלה
+      if (diffInSeconds > 0) {
         timeTaken = Number(diffInSeconds.toFixed(2));
-      } else {
-        // מונע זמן קבוע במידה ואין סנכרון מלא ב-DB
-        timeTaken = Number((0.5 + (now % 4000) / 1000).toFixed(2));
       }
     }
 
-    // ג. שמירת התשובה ב-DB
+    // ג. שמירה ב-DB
     await supabase.from('game_answers').upsert(
       {
         game_pin: pin,
@@ -92,13 +87,13 @@ export async function GET(req: Request) {
       payload: {
         playerId: phone,
         answerIndex: answerIndex,
-        timeTaken: timeTaken, // שולח זמן משתנה שמשפיע ישירות על הניקוד!
+        timeTaken: timeTaken, // שולח את הזמן המדויק שנמדד!
       },
     });
 
-    // ה. חזרה מיידית לשלט אילם (Digits מונע אישור קולי)
+    // ה. חזרה מיידית לשלט אילם לקליטה הבאה
     return new Response(
-      `read=t- =answer,tap,1,1,3600,Digits,no,no,no&pin=${pin}`,
+      `read=t-א=answer,tap,1,1,3600,Digits,no,no,no&pin=${pin}`,
       { headers: { 'Content-Type': 'text/plain; charset=utf-8' } }
     );
   }
