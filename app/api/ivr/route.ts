@@ -11,84 +11,102 @@ export async function GET(req: Request) {
 
   const phone = searchParams.get('ApiPhone') || searchParams.get('phone') || '0000000000';
   const action = searchParams.get('action') || 'JOIN';
+  
+  // ימות המשיח מעבירה את pin אם הוא הוקש קודם לכן, או שנקבל אותו מה-searchParams
   const pin = searchParams.get('pin');
   const answer = searchParams.get('answer');
 
-  // --- 1. שלב התחברות (קליטת PIN) ---
+  // -------------------------------------------------------------
+  // 1. שלב התחברות (קליטת PIN של 6 ספרות)
+  // -------------------------------------------------------------
   if (action === 'JOIN') {
     if (!pin) {
+      // קליטת 6 ספרות של קוד המשחק. ללא אישורים, קליטה מהירה
       return new Response(
         `read=t-ברוכים הבאים למגה קליק! אנא הקישו את קוד המשחק=pin,tap,6,6,10,Number,no,no,no`,
         { headers: { 'Content-Type': 'text/plain; charset=utf-8' } }
       );
     }
 
-    // שמירת השחקן
-    await supabase.from('game_players').upsert({
+    // שמירת השחקן ב-Supabase
+    const { error } = await supabase.from('game_players').upsert({
       game_pin: pin,
       player_name: `טלפון ${phone.slice(-4)}`,
       phone: phone,
     });
 
-    // מעבר רציף בלופ פנימי לשלב ANSWER יחד עם ה-PIN
-    return new Response(
-      `id_list_message=t-נכנסתם בהצלחה! השאירו את הטלפון פתוח כשלט.&read=f-bgmusic=answer,tap,1,1,180,Number,no,no,no&pin=${pin}&action=ANSWER`,
-      { headers: { 'Content-Type': 'text/plain; charset=utf-8' } }
-    );
-  }
-
-  // --- 2. שלב השלט האילם (ANSWER) ---
-  if (action === 'ANSWER') {
-    if (!answer) {
-      return new Response(`read=f-bgmusic=answer,tap,1,1,180,Number,no,no,no&pin=${pin}&action=ANSWER`, {
+    if (error) {
+      return new Response(`read=t-קוד המשחק שגוי. אנא הקישו שוב=pin,tap,6,6,10,Number,no,no,no`, {
         headers: { 'Content-Type': 'text/plain; charset=utf-8' },
       });
     }
 
-    const now = Date.now();
-    const answerIndex = Number(answer) - 1; // 1->0, 2->1
-
-    // מציאת השאלה האקטיבית וחישוב זמן
-    const { data: activeGame } = await supabase
-      .from('games')
-      .select('current_question_index, updated_at')
-      .eq('pin', pin)
-      .single();
-
-    const currentQuestionIndex = activeGame?.current_question_index ?? 0;
-    const questionStartTime = activeGame?.updated_at ? new Date(activeGame.updated_at).getTime() : now;
-    const timeTaken = Math.max(0, Number(((now - questionStartTime) / 1000).toFixed(2)));
-
-    // עדכון ב-DB
-    await supabase.from('game_answers').upsert(
-      {
-        game_pin: pin,
-        phone: phone,
-        question_index: currentQuestionIndex,
-        answer_index: answerIndex,
-        answer_value: null,
-      },
-      { onConflict: 'game_pin, phone, question_index' }
+    // מעבר נקי לשלב ה-ANSWER עם הנתיבים המדויקים של הקבצים שלך!
+    return new Response(
+      `read=t-התחברת בהצלחה.&read=f-ivr2:bgmusic/000=answer,tap,1,1,180,Number,no,no,no`,
+      { headers: { 'Content-Type': 'text/plain; charset=utf-8' } }
     );
+  }
 
-    // שידור למסך המנחה ב-Realtime
-    const channel = supabase.channel(`game_${pin}`);
-    await channel.send({
-      type: 'broadcast',
-      event: 'SUBMIT_ANSWER',
-      payload: {
-        playerId: phone,
-        answerIndex: answerIndex,
-        timeTaken: timeTaken,
-      },
-    });
+  // -------------------------------------------------------------
+  // 2. שלב השלט האילם (קליטת מקש 1-4 בלייב)
+  // -------------------------------------------------------------
+  if (action === 'ANSWER') {
+    // אם לא נלחץ מקש עדיין (או שהגיע בטעות), מפעיל את מנגינת הרקע
+    if (!answer) {
+      return new Response(
+        `read=f-ivr2:bgmusic/000=answer,tap,1,1,180,Number,no,no,no`,
+        { headers: { 'Content-Type': 'text/plain; charset=utf-8' } }
+      );
+    }
+
+    const now = Date.now();
+    const answerIndex = Number(answer) - 1; // המרה מ-1,2,3,4 ל-0,1,2,3
+
+    // שליפת השאלה הפעילה ב-Supabase עבור המשחק הזה
+    if (pin) {
+      const { data: activeGame } = await supabase
+        .from('games')
+        .select('current_question_index, updated_at')
+        .eq('pin', pin)
+        .single();
+
+      const currentQuestionIndex = activeGame?.current_question_index ?? 0;
+      const questionStartTime = activeGame?.updated_at ? new Date(activeGame.updated_at).getTime() : now;
+      const timeTaken = Math.max(0, Number(((now - questionStartTime) / 1000).toFixed(2)));
+
+      // שמירה ב-DB (עדכון תשובה במקרה של שינוי)
+      await supabase.from('game_answers').upsert(
+        {
+          game_pin: pin,
+          phone: phone,
+          question_index: currentQuestionIndex,
+          answer_index: answerIndex,
+          answer_value: null,
+        },
+        { onConflict: 'game_pin, phone, question_index' }
+      );
+
+      // שידור בזמן אמת ללוח המנחה
+      const channel = supabase.channel(`game_${pin}`);
+      await channel.send({
+        type: 'broadcast',
+        event: 'SUBMIT_ANSWER',
+        payload: {
+          playerId: phone,
+          answerIndex: answerIndex,
+          timeTaken: timeTaken,
+        },
+      });
+    }
 
     /**
-     * השרשור המושלם:
-     * משמיע ביפ (f-ping) -> חוזר מיד למוזיקה -> שומר על ה-pin וה-action בשרשור הבא!
+     * השרשור התקני בימות המשיח:
+     * 1. השמעת קובץ הפינג המדויק: f-ivr2:ping/000
+     * 2. חזרה מידית למוזיקת הרקע ולקליטת המקש הבא: f-ivr2:bgmusic/000
      */
     return new Response(
-      `id_list_message=f-ping&read=f-bgmusic=answer,tap,1,1,180,Number,no,no,no&pin=${pin}&action=ANSWER`,
+      `read=f-ivr2:ping/000=none,tap,0,0,0,Number,no,no,no&read=f-ivr2:bgmusic/000=answer,tap,1,1,180,Number,no,no,no`,
       { headers: { 'Content-Type': 'text/plain; charset=utf-8' } }
     );
   }
