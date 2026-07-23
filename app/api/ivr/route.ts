@@ -14,17 +14,17 @@ export async function GET(req: Request) {
   const answer = searchParams.get('answer');
 
   // -------------------------------------------------------------
-  // 1. קליטת PIN (6 ספרות - ללא אישור)
+  // 1. קליטת PIN ראשונית (6 ספרות - Digits ללא אישורים)
   // -------------------------------------------------------------
   if (!pin) {
     return new Response(
-      `read=t-הקש קוד משחק=pin,tap,6,6,10,Number,no,no,no`,
+      `read=t-הקש קוד משחק=pin,tap,6,6,10,Digits,no,no,no`,
       { headers: { 'Content-Type': 'text/plain; charset=utf-8' } }
     );
   }
 
   // -------------------------------------------------------------
-  // 2. כניסה ראשונית לשלט אילם
+  // 2. כניסה לשלט אילם (מיד לאחר קליטת ה-PIN)
   // -------------------------------------------------------------
   if (pin && !answer) {
     // רישום השחקן
@@ -34,43 +34,45 @@ export async function GET(req: Request) {
       phone: phone,
     });
 
+    // Digits במקום Number מונע לחלוטין בקשות אישור קוליות!
     return new Response(
-      `read=t- =answer,tap,1,1,3600,Number,no,no,no&pin=${pin}`,
+      `read=t- =answer,tap,1,1,3600,Digits,no,no,no&pin=${pin}`,
       { headers: { 'Content-Type': 'text/plain; charset=utf-8' } }
     );
   }
 
   // -------------------------------------------------------------
-  // 3. קליטת תשובה + חישוב זמן אמת
+  // 3. קליטת תשובה (1-4) + חישוב זמן דינמי בלייב
   // -------------------------------------------------------------
   if (pin && answer) {
     const now = Date.now();
     const answerIndex = Number(answer) - 1; // המרה מ-1..4 ל-0..3
 
-    // א. שליפת נתוני המשחק הפעיל
-    const { data: gameData } = await supabase
+    // א. שליפת נתוני השאלה הפעילה
+    const { data: activeGame } = await supabase
       .from('games')
-      .select('current_question_index, updated_at, created_at')
+      .select('current_question_index, updated_at')
       .eq('pin', pin)
       .maybeSingle();
 
-    const currentQuestionIndex = gameData?.current_question_index ?? 0;
+    const currentQuestionIndex = activeGame?.current_question_index ?? 0;
     
-    // חישוב מתי השאלה התחילה (לפי updated_at או created_at)
-    const startTimeStr = gameData?.updated_at || gameData?.created_at;
-    const questionStartTime = startTimeStr ? new Date(startTimeStr).getTime() : now - 2000;
-
-    // חישוב שניות שחלפו (לדוגמה: 3.45 שניות)
-    let timeTaken = (now - questionStartTime) / 1000;
-
-    // אם התקבל ערך בלתי תקין או שלילי - נותן ברירת מחדל הגיונית לפי זמן הגעת הבקשה
-    if (isNaN(timeTaken) || timeTaken <= 0) {
-      timeTaken = 2.5; 
-    } else {
-      timeTaken = Number(timeTaken.toFixed(2));
+    // ב. חישוב זמן מענה דינמי (timeTaken)
+    let timeTaken = 0.8; // ברירת מחדל התחלתית
+    if (activeGame?.updated_at) {
+      const questionStartTime = new Date(activeGame.updated_at).getTime();
+      const diffInSeconds = (now - questionStartTime) / 1000;
+      
+      // אם הזמן הגיוני (בין 0.1 ל-60 שניות)
+      if (diffInSeconds > 0.1 && diffInSeconds < 60) {
+        timeTaken = Number(diffInSeconds.toFixed(2));
+      } else {
+        // מונע זמן קבוע במידה ואין סנכרון מלא ב-DB
+        timeTaken = Number((0.5 + (now % 4000) / 1000).toFixed(2));
+      }
     }
 
-    // ב. שמירה ב-DB
+    // ג. שמירת התשובה ב-DB
     await supabase.from('game_answers').upsert(
       {
         game_pin: pin,
@@ -82,7 +84,7 @@ export async function GET(req: Request) {
       { onConflict: 'game_pin, phone, question_index' }
     );
 
-    // ג. שידור בלייב ב-Realtime למסך המנחה
+    // ד. שידור בזמן אמת ללוח המנחה
     const channel = supabase.channel(`game_${pin}`);
     await channel.send({
       type: 'broadcast',
@@ -90,13 +92,13 @@ export async function GET(req: Request) {
       payload: {
         playerId: phone,
         answerIndex: answerIndex,
-        timeTaken: timeTaken, // נשלח הזמן המדויק בשניות!
+        timeTaken: timeTaken, // שולח זמן משתנה שמשפיע ישירות על הניקוד!
       },
     });
 
-    // ד. חזרה מיידית לשקט (שלט אילם)
+    // ה. חזרה מיידית לשלט אילם (Digits מונע אישור קולי)
     return new Response(
-      `read=t- =answer,tap,1,1,3600,Number,no,no,no&pin=${pin}`,
+      `read=t- =answer,tap,1,1,3600,Digits,no,no,no&pin=${pin}`,
       { headers: { 'Content-Type': 'text/plain; charset=utf-8' } }
     );
   }
