@@ -12,18 +12,21 @@ function Button({
 }: {
   href: string;
   children: React.ReactNode;
-  kind?: 'primary' | 'secondary' | 'ghost';
+  kind?: 'primary' | 'secondary' | 'ghost' | 'outline';
   className?: string;
 }) {
   const baseStyle =
-    'inline-flex items-center justify-center gap-2 rounded-2xl font-bold transition-all duration-300 active:scale-95 py-3.5 px-7 text-base shadow-lg';
+    'inline-flex items-center justify-center gap-2.5 rounded-2xl font-bold transition-all duration-300 active:scale-95 py-3.5 px-7 text-base shadow-lg';
 
   const styles = {
     primary:
       'bg-gradient-to-r from-fuchsia-500 to-violet-600 text-white hover:from-fuchsia-400 hover:to-violet-500 shadow-fuchsia-500/30 hover:shadow-fuchsia-500/50 hover:-translate-y-0.5',
     secondary:
       'bg-white text-slate-950 hover:bg-slate-100 shadow-white/10 hover:shadow-white/20 hover:-translate-y-0.5',
-    ghost: 'bg-white/5 hover:bg-white/10 text-white border border-white/10 hover:border-white/20 backdrop-blur-md',
+    outline:
+      'border-2 border-fuchsia-500/80 text-fuchsia-300 hover:bg-fuchsia-500/20 hover:border-fuchsia-400 hover:text-white backdrop-blur-md hover:-translate-y-0.5',
+    ghost:
+      'bg-white/5 hover:bg-white/10 text-white border border-white/10 hover:border-white/20 backdrop-blur-md',
   };
 
   return (
@@ -60,9 +63,14 @@ const Icons = {
       <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 5v2m0 4v2m0 4v2M5 5a2 2 0 00-2 2v3a2 2 0 002 2h14a2 2 0 002-2V7a2 2 0 00-2-2H5z" />
     </svg>
   ),
-  ArrowLeft: () => (
+  Play: () => (
+    <svg className="w-5 h-5 fill-current" viewBox="0 0 24 24">
+      <path d="M8 5v14l11-7z" />
+    </svg>
+  ),
+  PlusCircle: () => (
     <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 19l-7-7m0 0l7-7m-7 7h18" />
+      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v6m3-3H9m12 0a9 9 0 11-18 0 9 9 0 0118 0z" />
     </svg>
   ),
 };
@@ -105,12 +113,15 @@ export default function Home() {
           </span>
         </div>
 
+        {/* Header Action Buttons */}
         <nav className="flex items-center gap-3">
-          <Button href="/play" kind="ghost" className="px-4 py-2.5 text-sm">
-            הצטרפות למשחק
+          <Button href="/play" kind="outline" className="px-4 py-2.5 text-sm">
+            <Icons.Play />
+            <span>כניסה למשחק</span>
           </Button>
-          <Button href="/login" className="px-4 py-2.5 text-sm">
-            יצירת משחק
+          <Button href="/login" kind="primary" className="px-4 py-2.5 text-sm">
+            <Icons.PlusCircle />
+            <span>יצירת משחק</span>
           </Button>
         </nav>
       </header>
@@ -125,19 +136,22 @@ export default function Home() {
             הופכים כל מפגש
             <br />
             <span className="bg-gradient-to-l from-fuchsia-300 via-pink-400 to-violet-400 bg-clip-text text-transparent">
-              לחויה מחושמלת.
+              לחוויה מחושמלת.
             </span>
           </h1>
           <p className="max-w-xl text-lg md:text-xl leading-relaxed text-white/70 font-light">
             MegaClick מעוררת לחיים כיתות לימוד, אירועים חברתיים ומפגשי צוות עם טריוויה מהירה, אינטראקטיבית ובזמן אמת.
           </p>
-          <div className="flex flex-wrap gap-4 pt-2">
-            <Button href="/login">
-              <span>התחל בחינם</span>
-              <Icons.ArrowLeft />
+
+          {/* Main Action Buttons */}
+          <div className="flex flex-wrap gap-4 pt-4">
+            <Button href="/play" kind="primary" className="text-lg px-8 py-4">
+              <Icons.Play />
+              <span>להצטרפות למשחק (קוד PIN)</span>
             </Button>
-            <Button href="/play" kind="ghost">
-              יש לי קוד PIN
+            <Button href="/login" kind="outline" className="text-lg px-8 py-4">
+              <Icons.PlusCircle />
+              <span>יצירת משחק / התחברות</span>
             </Button>
           </div>
         </div>
@@ -193,7 +207,7 @@ export default function Home() {
       <section className="mx-auto max-w-7xl px-6 py-24 border-t border-white/10">
         <div className="text-center max-w-2xl mx-auto mb-16">
           <span className="text-sm font-bold text-fuchsia-400 uppercase tracking-widest">תהליך פשוט ומהיר</span>
-          <h2 className="mt-2 text-3xl font-black md:text-5xl">איך זה עובד בש3 צעדים?</h2>
+          <h2 className="mt-2 text-3xl font-black md:text-5xl">איך זה עובד ב-3 צעדים?</h2>
         </div>
 
         <div className="grid gap-8 md:grid-cols-3">
@@ -240,11 +254,18 @@ export default function Home() {
         <div className="absolute inset-0 bg-[radial-gradient(circle_at_top_right,rgba(255,255,255,0.2),transparent_50%)] pointer-events-none" />
         <h2 className="text-4xl font-black md:text-5xl tracking-tight relative z-10">מוכנים להתחיל לשחק?</h2>
         <p className="mt-4 text-lg text-white/80 max-w-xl mx-auto font-light relative z-10">
-          הצטרפו למאות מנחים שיוצרים חוויות משחק בלתי נשכחות בקלות ובמהירות.
+          הצטרפו למאות מנחים ושחקנים שיוצרים חוויות משחק בלתי נשכחות בקלות ובמהירות.
         </p>
-        <div className="mt-8 relative z-10">
-          <Button href="/login" kind="secondary" className="text-lg px-10 py-4 shadow-2xl">
-            יצירת משחק חדש עכשיו 🚀
+
+        {/* Bottom CTA Action Buttons */}
+        <div className="mt-8 flex flex-wrap justify-center gap-4 relative z-10">
+          <Button href="/play" kind="secondary" className="text-lg px-8 py-4">
+            <Icons.Play />
+            <span>הצטרף למשחק עכשיו</span>
+          </Button>
+          <Button href="/login" kind="ghost" className="text-lg px-8 py-4 bg-white/10 hover:bg-white/20 border-white/20">
+            <Icons.PlusCircle />
+            <span>צור משחק חדש</span>
           </Button>
         </div>
       </section>
