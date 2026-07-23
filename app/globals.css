@@ -2,6 +2,10 @@
 @tailwind components;
 @tailwind utilities;
 
+html {
+  scroll-behavior: smooth;
+}
+
 body {
   margin: 0;
   padding: 0;
@@ -15,10 +19,10 @@ body {
 /* Background Grid Pattern */
 .grid-bg {
   background-image: radial-gradient(
-    rgba(217, 70, 239, 0.15) 1px,
+    rgba(217, 70, 239, 0.12) 1px,
     transparent 1px
   );
-  background-size: 28px 28px;
+  background-size: 32px 32px;
 }
 
 /* Glassmorphism Effect */
@@ -30,17 +34,44 @@ body {
   box-shadow: 0 8px 32px 0 rgba(0, 0, 0, 0.37);
 }
 
+.glass-card {
+  background: rgba(255, 255, 255, 0.05);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+}
+
 /* Neon Glow Shadow */
-.neon {
-  box-shadow: 0 0 40px rgba(217, 70, 239, 0.25),
+.neon-glow {
+  box-shadow: 0 0 50px rgba(217, 70, 239, 0.25),
     inset 0 0 20px rgba(217, 70, 239, 0.1);
+}
+
+.neon-border {
+  border-color: rgba(217, 70, 239, 0.5);
+  box-shadow: 0 0 15px rgba(217, 70, 239, 0.3);
 }
 
 @keyframes float {
   0%, 100% { transform: translateY(0px); }
-  50% { transform: translateY(-10px); }
+  50% { transform: translateY(-12px); }
 }
 
 .animate-float {
-  animation: float 5s ease-in-out infinite;
+  animation: float 6s ease-in-out infinite;
+}
+
+/* Custom Scrollbar */
+::-webkit-scrollbar {
+  width: 10px;
+}
+::-webkit-scrollbar-track {
+  background: #0d041e;
+}
+::-webkit-scrollbar-thumb {
+  background: #2e1065;
+  border-radius: 5px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: #c026d3;
 }
