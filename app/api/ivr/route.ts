@@ -9,32 +9,25 @@ const supabase = createClient(supabaseUrl, supabaseKey);
 export async function GET(req: Request) {
   const { searchParams } = new URL(req.url);
 
-  // פרמטרים שמגיעים מימות המשיח
+  // נתונים שמגיעים מימות המשיח
   const phone = searchParams.get('ApiPhone') || searchParams.get('phone') || '0000000000';
   const action = searchParams.get('action') || 'JOIN';
   const pin = searchParams.get('pin');
   const answer = searchParams.get('answer');
 
-  // --- שלב 1: הצטרפות למשחק לפי PIN (קליטת 6 ספרות) ---
+  // -------------------------------------------------------------
+  // 1. הצטרפות למשחק לפי קוד PIN (ללא אישורים וללא עיכובים)
+  // -------------------------------------------------------------
   if (action === 'JOIN') {
     if (!pin) {
-      /**
-       * הסבר על המבנה בימות המשיח:
-       * pin = שם המשתנה שיחזור ב-URL
-       * tap = מצב הקשת מקשים
-       * 6 = מקסימום ספרות (6 ספרות)
-       * 6 = מינימום ספרות (6 ספרות)
-       * 7 = שניות המתנה
-       * Number = סוג קלט (מספר)
-       * no = ללא השמעת אישור חוזרת
-       */
+      // no,no,no בסוף הפרמטרים מבטל לחלוטין את מנגנון האישור וההשמעה החוזרת
       return new Response(
-        `read=t-שלום, אנא הקש את קוד המשחק בן 6 הספרות=pin,tap,6,6,7,Number,no`,
+        `read=t-הקש קוד משחק=pin,tap,6,6,10,Number,no,no,no`,
         { headers: { 'Content-Type': 'text/plain; charset=utf-8' } }
       );
     }
 
-    // שמירת השחקן ב-Supabase (מספר הטלפון מזהה אותו)
+    // רישום השחקן
     const { error } = await supabase.from('game_players').upsert({
       game_pin: pin,
       player_name: `טלפון ${phone.slice(-4)}`,
@@ -42,41 +35,49 @@ export async function GET(req: Request) {
     });
 
     if (error) {
-      return new Response(`id_list_message=t-קוד המשחק שגוי או לא קיים. אנא נסה שוב.&go_to_folder=/`, {
+      return new Response(`id_list_message=t-קוד שגוי&go_to_folder=/`, {
         headers: { 'Content-Type': 'text/plain; charset=utf-8' },
       });
     }
 
-    // מעבר לשלוחה 2 לקבלת תשובות
+    // מעבר מיידי לשלוחה 2 (שלוחת המענה) במינימום דיבור
     return new Response(
-      `id_list_message=t-התחברת בהצלחה למשחק! כעת המתן לשאלה והקש את תשובתך&go_to_folder=/2`,
+      `id_list_message=t-מחובר&go_to_folder=/2`,
       { headers: { 'Content-Type': 'text/plain; charset=utf-8' } }
     );
   }
 
-  // --- שלב 2: מענה על שאלה דרך המקשים ---
+  // -------------------------------------------------------------
+  // 2. מענה על שאלה - קליטה מיידית + חישוב זמן הלחיצה
+  // -------------------------------------------------------------
   if (action === 'ANSWER') {
     if (!pin || !answer) {
-      // תומך גם בתשובה אמריקאית (ספרה 1) וגם בשאלת טווח (עד 5 ספרות)
-      return new Response(`read=t-אנא הקש את תשובתך ולאחריה סולמית=answer,tap,5,1,7,Number,no`, {
+      // קליטת מקש 1 בלבד (או מספר לטווח) - קליטה מידית ללא אישור
+      return new Response(`read=t-הקש תשובה=answer,tap,5,1,5,Number,no,no,no`, {
         headers: { 'Content-Type': 'text/plain; charset=utf-8' },
       });
     }
 
-    // א. מציאת השאלה האקטיבית העדכנית ב-Supabase עבור ה-PIN הזה
+    const now = Date.now();
+
+    // א. שליפת השאלה הפעילה וזמן תחילת השאלה מ-Supabase
     const { data: activeGame } = await supabase
       .from('games')
-      .select('current_question_index')
+      .select('current_question_index, updated_at')
       .eq('pin', pin)
       .single();
 
     const currentQuestionIndex = activeGame?.current_question_index ?? 0;
     
-    // בדיקה אם זו תשובה אמריקאית (ספרות 1-4) או מספר טווח
+    // חישוב זמן הלחיצה בשניות מדויקות (Math.max מונע מספר שלילי)
+    const questionStartTime = activeGame?.updated_at ? new Date(activeGame.updated_at).getTime() : now;
+    const timeTaken = Math.max(0, Number(((now - questionStartTime) / 1000).toFixed(2)));
+
+    // ב. זיהוי סוג התשובה (אמריקאית 1-4 או מספר טווח)
     const isSingleChoice = answer.length === 1 && Number(answer) >= 1 && Number(answer) <= 4;
     const answerIndex = isSingleChoice ? Number(answer) - 1 : null;
 
-    // ב. שמירת התשובה ב-DB
+    // ג. שמירה ב-DB (כולל זמן הלחיצה)
     await supabase.from('game_answers').insert({
       game_pin: pin,
       phone: phone,
@@ -85,7 +86,7 @@ export async function GET(req: Request) {
       question_index: currentQuestionIndex,
     });
 
-    // ג. שידור בלייב ב-Realtime למסך המנחה
+    // ד. שידור בלייב ב-Realtime למסך המנחה עם ה-timeTaken המדויק!
     const channel = supabase.channel(`game_${pin}`);
     await channel.send({
       type: 'broadcast',
@@ -94,11 +95,12 @@ export async function GET(req: Request) {
         playerId: phone,
         answerIndex: isSingleChoice ? answerIndex : undefined,
         answerValue: isSingleChoice ? undefined : answer,
-        timeTaken: 0,
+        timeTaken: timeTaken, // נשלח הזמן המדויק
       },
     });
 
-    return new Response(`id_list_message=t-תשובתך נקלטה בהצלחה!`, {
+    // ה. מחזיר צליל קצר/הודעה קצרה ומחזיר אותם מוכנים לשאלה הבאה
+    return new Response(`id_list_message=t-נקלט&go_to_folder=/2`, {
       headers: { 'Content-Type': 'text/plain; charset=utf-8' },
     });
   }
