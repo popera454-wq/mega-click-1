@@ -9,58 +9,52 @@ const supabase = createClient(supabaseUrl, supabaseKey);
 export async function GET(req: Request) {
   const { searchParams } = new URL(req.url);
 
-  // נתונים שמגיעים מימות המשיח
   const phone = searchParams.get('ApiPhone') || searchParams.get('phone') || '0000000000';
   const action = searchParams.get('action') || 'JOIN';
   const pin = searchParams.get('pin');
   const answer = searchParams.get('answer');
 
-  // -------------------------------------------------------------
-  // 1. הצטרפות למשחק לפי קוד PIN (ללא אישורים וללא עיכובים)
-  // -------------------------------------------------------------
+  // --- 1. שלב התחברות (ללא שינוי, קולט 6 ספרות) ---
   if (action === 'JOIN') {
     if (!pin) {
-      // no,no,no בסוף הפרמטרים מבטל לחלוטין את מנגנון האישור וההשמעה החוזרת
+      // כאן עדיין אפשר להשתמש בדיבור רובוטי כי זה רק פעם אחת בכניסה
       return new Response(
-        `read=t-הקש קוד משחק=pin,tap,6,6,10,Number,no,no,no`,
+        `read=t-ברוכים הבאים למגה קליק! אנא הקישו את קוד המשחק=pin,tap,6,6,10,Number,no,no,no`,
         { headers: { 'Content-Type': 'text/plain; charset=utf-8' } }
       );
     }
 
-    // רישום השחקן
-    const { error } = await supabase.from('game_players').upsert({
+    await supabase.from('game_players').upsert({
       game_pin: pin,
       player_name: `טלפון ${phone.slice(-4)}`,
       phone: phone,
     });
 
-    if (error) {
-      return new Response(`id_list_message=t-קוד שגוי&go_to_folder=/`, {
-        headers: { 'Content-Type': 'text/plain; charset=utf-8' },
-      });
-    }
-
-    // מעבר מיידי לשלוחה 2 (שלוחת המענה) במינימום דיבור
+    // כניסה חלקה למשחק עם הודעה קצרה, ואז מעבר לשלוחה 2
     return new Response(
-      `id_list_message=t-מחובר&go_to_folder=/2`,
+      `id_list_message=t-נכנסתם בהצלחה! השאירו את הטלפון פתוח כשלט.&go_to_folder=/2`,
       { headers: { 'Content-Type': 'text/plain; charset=utf-8' } }
     );
   }
 
-  // -------------------------------------------------------------
-  // 2. מענה על שאלה - קליטה מיידית + חישוב זמן הלחיצה
-  // -------------------------------------------------------------
+  // --- 2. שלב השלט האילם (Pro Clicker Mode) ---
   if (action === 'ANSWER') {
     if (!pin || !answer) {
-      // קליטת מקש 1 בלבד (או מספר לטווח) - קליטה מידית ללא אישור
-      return new Response(`read=t-הקש תשובה=answer,tap,5,1,5,Number,no,no,no`, {
+      /**
+       * ה-MAGIC TRICK: 
+       * במקום להגיד "אנא הקש", אנחנו מנגנים קובץ שמע (f-bgmusic).
+       * הפרמטר '1,1' מבטיח שקולטים *רק* ספרה אחת. ברגע שלוחצים - זה נשלח מיד!
+       * 180 = אורך מקסימלי של מוזיקה (3 דקות כל לופ)
+       */
+      return new Response(`read=f-bgmusic=answer,tap,1,1,180,Number,no,no,no`, {
         headers: { 'Content-Type': 'text/plain; charset=utf-8' },
       });
     }
 
     const now = Date.now();
+    const answerIndex = Number(answer) - 1; // ממיר 1->0, 2->1 וכו'
 
-    // א. שליפת השאלה הפעילה וזמן תחילת השאלה מ-Supabase
+    // מציאת השאלה האקטיבית (כדי לחשב זמן לחיצה)
     const { data: activeGame } = await supabase
       .from('games')
       .select('current_question_index, updated_at')
@@ -68,39 +62,40 @@ export async function GET(req: Request) {
       .single();
 
     const currentQuestionIndex = activeGame?.current_question_index ?? 0;
-    
-    // חישוב זמן הלחיצה בשניות מדויקות (Math.max מונע מספר שלילי)
     const questionStartTime = activeGame?.updated_at ? new Date(activeGame.updated_at).getTime() : now;
     const timeTaken = Math.max(0, Number(((now - questionStartTime) / 1000).toFixed(2)));
 
-    // ב. זיהוי סוג התשובה (אמריקאית 1-4 או מספר טווח)
-    const isSingleChoice = answer.length === 1 && Number(answer) >= 1 && Number(answer) <= 4;
-    const answerIndex = isSingleChoice ? Number(answer) - 1 : null;
+    // שמירה ב-DB 
+    // בגרסת Pro - שחקן יכול לשנות תשובה אם הוא לוחץ שוב (הלחיצה האחרונה קובעת)
+    await supabase.from('game_answers').upsert(
+      {
+        game_pin: pin,
+        phone: phone,
+        question_index: currentQuestionIndex,
+        answer_index: answerIndex,
+        answer_value: null,
+      },
+      { onConflict: 'game_pin, phone, question_index' } // דורש הגדרת Unique ב-Supabase!
+    );
 
-    // ג. שמירה ב-DB (כולל זמן הלחיצה)
-    await supabase.from('game_answers').insert({
-      game_pin: pin,
-      phone: phone,
-      answer_index: answerIndex,
-      answer_value: isSingleChoice ? null : String(answer),
-      question_index: currentQuestionIndex,
-    });
-
-    // ד. שידור בלייב ב-Realtime למסך המנחה עם ה-timeTaken המדויק!
+    // שידור למסך
     const channel = supabase.channel(`game_${pin}`);
     await channel.send({
       type: 'broadcast',
       event: 'SUBMIT_ANSWER',
       payload: {
         playerId: phone,
-        answerIndex: isSingleChoice ? answerIndex : undefined,
-        answerValue: isSingleChoice ? undefined : answer,
-        timeTaken: timeTaken, // נשלח הזמן המדויק
+        answerIndex: answerIndex,
+        timeTaken: timeTaken,
       },
     });
 
-    // ה. מחזיר צליל קצר/הודעה קצרה ומחזיר אותם מוכנים לשאלה הבאה
-    return new Response(`id_list_message=t-נקלט&go_to_folder=/2`, {
+    /**
+     * אישור לחיצה (Feedback) ללא דיבור:
+     * מנגנים קובץ צליל "פיפ" (f-ping)
+     * ומיד זורקים אותו חזרה לתחילת הלופ (go_to_folder=/2) שישמע שוב את המוזיקה.
+     */
+    return new Response(`id_list_message=f-ping&go_to_folder=/2`, {
       headers: { 'Content-Type': 'text/plain; charset=utf-8' },
     });
   }
